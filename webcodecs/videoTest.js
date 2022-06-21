@@ -18,6 +18,16 @@ const totalFrames = Math.floor(maxTime / dt);
 let keyframeInterval = 1000;	// keyframe every 1 second
 let lastKeyframeTime = 0;
 
+function getParameterByName(name) {
+    name = name.replace(/[\[]/, '\\\[').replace(/[\]]/, '\\\]');
+    var regex = new RegExp('[\\?&]' + name + '=([^&#]*)'),
+        results = regex.exec(location.search);
+    return results === null ? '' : decodeURIComponent(results[1].replace(
+        /\+/g, ' '));
+}
+
+var fps = getParameterByName('fps') === 'true'? true:false;
+
 //////////////////////////////////////
 // VideoEncoder
 const videoEncoder = new VideoEncoder({
@@ -25,7 +35,8 @@ const videoEncoder = new VideoEncoder({
 	error: VideoEncoderError
 });
 
-await videoEncoder.configure({
+if (fps) {
+  await videoEncoder.configure({
 	codec: "avc1.420034",		// AVC (H.264), Baseline profile, level 5.2
 	width: canvasWidth,
 	height: canvasHeight,
@@ -35,7 +46,16 @@ await videoEncoder.configure({
 	framerate: frameRate,
 	
 	avc: {format: "avc"} 
-});
+  });
+} else {
+  await videoEncoder.configure({
+	codec: "avc1.420034",		// AVC (H.264), Baseline profile, level 5.2
+	width: canvasWidth,
+	height: canvasHeight,
+	
+	avc: {format: "avc"} 
+  });	
+}
 
 //////////////////////////////////////
 // MP4Box for muxing
