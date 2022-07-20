@@ -37,9 +37,9 @@ const videoEncoder = new VideoEncoder({
 
 if (fps) {
   await videoEncoder.configure({
-	codec: "avc1.420034",		// AVC (H.264), Baseline profile, level 5.2
-	width: canvasWidth,
-	height: canvasHeight,
+	codec: "avc1.4D0034",		// AVC (H.264), Baseline profile, level 5.2
+	width: 8,
+	height: 8,
 	
 	// BUG: specifying this causes an unplayable video.
 	// Commenting it out allows the playback to work.
@@ -49,9 +49,9 @@ if (fps) {
   });
 } else {
   await videoEncoder.configure({
-	codec: "avc1.420034",		// AVC (H.264), Baseline profile, level 5.2
-	width: canvasWidth,
-	height: canvasHeight,
+	codec: "avc1.4D0034",		// AVC (H.264), Baseline profile, level 5.2
+	width: 8,
+	height: 8,
 	
 	avc: {format: "avc"} 
   });	
