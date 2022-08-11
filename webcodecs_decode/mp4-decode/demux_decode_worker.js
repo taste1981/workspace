@@ -7,7 +7,7 @@ self.addEventListener('message', function(e) {
   let startTime = 0;
   let frameCount = 0;
 
-  let demuxer = new MP4Demuxer("/webcodecs/samples/media/bbb.mp4");
+  let demuxer = new MP4Demuxer("/webcodecs_decode/media/bbb.mp4");
 
   function getFrameStats() {
       let now = performance.now();
