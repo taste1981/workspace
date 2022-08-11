@@ -103,7 +103,7 @@ let hevc =[
   "hvc1.1.6.L0.-1",
 ]
 
-async function createDecodedFrame(codec) {
+async function createDecodedFrame1(codec) {
   const config = {
     // codec:'hvc1.1.6.H120.90',//
     // codec:'hev1.1.6.H120.90',
@@ -145,7 +145,7 @@ async function createDecodedFrame(codec) {
   return frame;
 }
 
-async function createDecodedFrame1(codec) {
+async function createDecodedFrame(codec) {
   const config = {codec: codec,//'hvc1.2.4.L93.B0', 
   codedWidth: 1280, codedHeight: 720};
   const result = await fetch('https://lf3-cdn-tos.bytegoofy.com/obj/tcs-client/resources/720p.hevc');
