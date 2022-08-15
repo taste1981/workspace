@@ -56,6 +56,11 @@ class MP4Source {
     return traks[0].mdia.minf.stbl.stsd.entries[0].avcC;
   }
 
+  getHvccBox() {
+	const traks = this.file.mov.traks.filter(trak => trak.media.minf.stbl.stsd.entries[0].hvcC);
+	return traks[0].mdia.minf.stbl.stsd.entries[0].hvcC;
+  }
+
   start(track, onChunk) {
     this._onChunk = onChunk;
     this.file.setExtractionOptions(track.id);
@@ -106,6 +111,14 @@ class Writer {
     this.idx +=2;
   }
 
+  writeUint32(value) {
+	var arr = new Uint32Array(1);
+    arr[0] = value;
+    var buffer = new Uint8Array(arr.buffer);
+    this.data.set([buffer[3], buffer[2], buffer[1], buffer[0]], this.idx);
+    this.idx +=4;
+  }
+
   writeUint8Array(value) {
     this.data.set(value, this.idx);
     this.idx += value.length;
@@ -117,7 +130,7 @@ class MP4Demuxer {
     this.source = new MP4Source(uri);
   }
 
-  getExtradata(avccBox) {
+  getAvcExtradata(avccBox) {
     var i;
     var size = 7;
     for (i = 0; i < avccBox.SPS.length; i++) {
@@ -152,11 +165,66 @@ class MP4Demuxer {
     return writer.getData();
   }
 
+  getHvcExtradata(hvccBox) {
+    var i;
+    var size = 23;
+	for (i = 0; i < hvccBox.nalu_arrays.length; i++) {
+	  // each item in the nalu_array will:
+	  // 1. include 1 first byte for array_completeness and nalu type;
+	  // 2. two bytes for num_nalus;
+	  // 3. for each item in num_nalus:
+	  //    - 2 bytes for nalu length;
+	  //    - nalu_length_bytes of data.
+	  size+= 3;
+	  for (j = 0; j < hvccBox.nalu_arrays[i].length; j++) {
+        size+= 2 + hvccBox.nalu_arrays[i][j].data.length;
+      }
+	}
+
+    var writer = new Writer(size);
+
+    writer.writeUint8(hvccBox.configurationVersion);
+	// general_profile_space(2)/general_tier_flag(1)/general_profile_idc(5)
+	writer.writeUint8(hvccBox.general_profile_space << 6 +
+	                  hvccBox.general_tier_flag << 5 +
+					  hvccBox.general_profile_idc);
+	writer.writeUint32(hvccBox.general_profile_compatibility);
+	writer.writeUint8Array(hvccBox.general_constraint_indicator);
+	writer.writeUint8(hvccBox.general_level_idc);
+    writer.writeUint16(hvccBox.min_spatial_segmentation_idc + (15<<24));
+	writer.writeUint8(hvccBox.parallesimType + (63<<2));
+	writer.writeUint8(hvccBox.chroma_format_idc + (63<<2));
+	writer.writeUint8(hvccBox.bit_depth_luma_minus8 + (31<<3));
+	writer.writeUint8(hvccBox.bit_depth_chroma_minus8 + (31<<3));
+	writer.writeUint16(hvccBox.avgFrameRate);
+	writer.writeUint8(hvccBox.constantFrameRate << 6 +
+	                  hvccBox.numTemporalLayers << 3 +
+					  hvccBox.temporalIdNested << 2 +
+					  hvccBox.lengthSizeMinusOne);
+	writer.writeUint8(hvccBox.nalu_arrays.length);
+	for (i = 0; i < hvccBox.nalu_arrays.length; i++) {
+	  // bit(1) array_completeness + bit(1) reserved = 0 + bit(6) nal_unit_type
+	  writer.writeUint8((hvccBox.nalu_arrays[i].completeness<<7) +
+	                     hvccBox.nalu_arrays[i].nalu_type);
+	  for ( j = 0; j < hvccBox.nalu_arrays[i].length; j++) {
+	    writer.writeUint16(hvccBox.nalu_arrays[i][j].data.length);
+		writer.writeUint8Array(hvccBox.nalu_arrays[i][j].data);
+	  }
+	}
+
+    return writer.getData();
+  }
+
   async getConfig() {
     let info = await this.source.getInfo();
     this.track = info.videoTracks[0];
 
-    var extradata = this.getExtradata(this.source.getAvccBox());
+    var extradata;
+	if (this.track.codec.startsWith('avc')) {
+	  this.getAvcExtradata(this.source.getAvccBox());
+	} else if (this.track.codec.startsWith('hvc') || this.track.codec.startsWith('hev')) {
+	  this.getHvcExtradata(this.source.getHvccBox());
+	}
 
     let config = {
       codec: this.track.codec,
