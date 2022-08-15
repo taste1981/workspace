@@ -57,7 +57,7 @@ class MP4Source {
   }
 
   getHvccBox() {
-	const traks = this.file.mov.traks.filter(trak => trak.media.minf.stbl.stsd.entries[0].hvcC);
+	const traks = this.file.moov.traks.filter(trak => trak.mdia.minf.stbl.stsd.entries[0].hvcC);
 	return traks[0].mdia.minf.stbl.stsd.entries[0].hvcC;
   }
 
@@ -167,7 +167,9 @@ class MP4Demuxer {
 
   getHvcExtradata(hvccBox) {
     var i;
+	var j;
     var size = 23;
+
 	for (i = 0; i < hvccBox.nalu_arrays.length; i++) {
 	  // each item in the nalu_array will:
 	  // 1. include 1 first byte for array_completeness and nalu type;
@@ -192,21 +194,23 @@ class MP4Demuxer {
 	writer.writeUint8Array(hvccBox.general_constraint_indicator);
 	writer.writeUint8(hvccBox.general_level_idc);
     writer.writeUint16(hvccBox.min_spatial_segmentation_idc + (15<<24));
-	writer.writeUint8(hvccBox.parallesimType + (63<<2));
+	writer.writeUint8(hvccBox.parallelismType + (63<<2));
 	writer.writeUint8(hvccBox.chroma_format_idc + (63<<2));
 	writer.writeUint8(hvccBox.bit_depth_luma_minus8 + (31<<3));
 	writer.writeUint8(hvccBox.bit_depth_chroma_minus8 + (31<<3));
 	writer.writeUint16(hvccBox.avgFrameRate);
-	writer.writeUint8(hvccBox.constantFrameRate << 6 +
-	                  hvccBox.numTemporalLayers << 3 +
-					  hvccBox.temporalIdNested << 2 +
-					  hvccBox.lengthSizeMinusOne);
+	var tmp_byte = (hvccBox.constantFrameRate<<6) +
+	               (hvccBox.numTemporalLayers<<3) +
+				   (hvccBox.temporalIdNested<<2) +
+				   hvccBox.lengthSizeMinusOne;
+	writer.writeUint8(tmp_byte);
 	writer.writeUint8(hvccBox.nalu_arrays.length);
 	for (i = 0; i < hvccBox.nalu_arrays.length; i++) {
 	  // bit(1) array_completeness + bit(1) reserved = 0 + bit(6) nal_unit_type
 	  writer.writeUint8((hvccBox.nalu_arrays[i].completeness<<7) +
 	                     hvccBox.nalu_arrays[i].nalu_type);
-	  for ( j = 0; j < hvccBox.nalu_arrays[i].length; j++) {
+	  writer.writeUint16(hvccBox.nalu_arrays[i].length);
+	  for (j = 0; j < hvccBox.nalu_arrays[i].length; j++) {
 	    writer.writeUint16(hvccBox.nalu_arrays[i][j].data.length);
 		writer.writeUint8Array(hvccBox.nalu_arrays[i][j].data);
 	  }
@@ -221,9 +225,9 @@ class MP4Demuxer {
 
     var extradata;
 	if (this.track.codec.startsWith('avc')) {
-	  this.getAvcExtradata(this.source.getAvccBox());
+	  extradata = this.getAvcExtradata(this.source.getAvccBox());
 	} else if (this.track.codec.startsWith('hvc') || this.track.codec.startsWith('hev')) {
-	  this.getHvcExtradata(this.source.getHvccBox());
+	  extradata = this.getHvcExtradata(this.source.getHvccBox());
 	}
 
     let config = {
