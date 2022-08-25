@@ -57,8 +57,8 @@ class MP4Source {
   }
 
   getHvccBox() {
-	const traks = this.file.moov.traks.filter(trak => trak.mdia.minf.stbl.stsd.entries[0].hvcC);
-	return traks[0].mdia.minf.stbl.stsd.entries[0].hvcC;
+    const traks = this.file.moov.traks.filter(trak => trak.mdia.minf.stbl.stsd.entries[0].hvcC);
+    return traks[0].mdia.minf.stbl.stsd.entries[0].hvcC;
   }
 
   start(track, onChunk) {
@@ -112,7 +112,7 @@ class Writer {
   }
 
   writeUint32(value) {
-	var arr = new Uint32Array(1);
+    var arr = new Uint32Array(1);
     arr[0] = value;
     var buffer = new Uint8Array(arr.buffer);
     this.data.set([buffer[3], buffer[2], buffer[1], buffer[0]], this.idx);
@@ -166,55 +166,46 @@ class MP4Demuxer {
   }
 
   getHvcExtradata(hvccBox) {
-    var i;
-	var j;
+    var i,j;
     var size = 23;
 
-	for (i = 0; i < hvccBox.nalu_arrays.length; i++) {
-	  // each item in the nalu_array will:
-	  // 1. include 1 first byte for array_completeness and nalu type;
-	  // 2. two bytes for num_nalus;
-	  // 3. for each item in num_nalus:
-	  //    - 2 bytes for nalu length;
-	  //    - nalu_length_bytes of data.
-	  size+= 3;
-	  for (j = 0; j < hvccBox.nalu_arrays[i].length; j++) {
+    for (i = 0; i < hvccBox.nalu_arrays.length; i++) {
+      size+= 3;
+      for (j = 0; j < hvccBox.nalu_arrays[i].length; j++) {
         size+= 2 + hvccBox.nalu_arrays[i][j].data.length;
       }
-	}
+    }
 
     var writer = new Writer(size);
 
     writer.writeUint8(hvccBox.configurationVersion);
-	// general_profile_space(2)/general_tier_flag(1)/general_profile_idc(5)
-	writer.writeUint8(hvccBox.general_profile_space << 6 +
-	                  hvccBox.general_tier_flag << 5 +
-					  hvccBox.general_profile_idc);
-	writer.writeUint32(hvccBox.general_profile_compatibility);
-	writer.writeUint8Array(hvccBox.general_constraint_indicator);
-	writer.writeUint8(hvccBox.general_level_idc);
+    writer.writeUint8(hvccBox.general_profile_space << 6 +
+                      hvccBox.general_tier_flag << 5 +
+                      hvccBox.general_profile_idc);
+    writer.writeUint32(hvccBox.general_profile_compatibility);
+    writer.writeUint8Array(hvccBox.general_constraint_indicator);
+    writer.writeUint8(hvccBox.general_level_idc);
     writer.writeUint16(hvccBox.min_spatial_segmentation_idc + (15<<24));
-	writer.writeUint8(hvccBox.parallelismType + (63<<2));
-	writer.writeUint8(hvccBox.chroma_format_idc + (63<<2));
-	writer.writeUint8(hvccBox.bit_depth_luma_minus8 + (31<<3));
-	writer.writeUint8(hvccBox.bit_depth_chroma_minus8 + (31<<3));
-	writer.writeUint16(hvccBox.avgFrameRate);
-	var tmp_byte = (hvccBox.constantFrameRate<<6) +
-	               (hvccBox.numTemporalLayers<<3) +
-				   (hvccBox.temporalIdNested<<2) +
-				   hvccBox.lengthSizeMinusOne;
-	writer.writeUint8(tmp_byte);
-	writer.writeUint8(hvccBox.nalu_arrays.length);
-	for (i = 0; i < hvccBox.nalu_arrays.length; i++) {
-	  // bit(1) array_completeness + bit(1) reserved = 0 + bit(6) nal_unit_type
-	  writer.writeUint8((hvccBox.nalu_arrays[i].completeness<<7) +
-	                     hvccBox.nalu_arrays[i].nalu_type);
-	  writer.writeUint16(hvccBox.nalu_arrays[i].length);
-	  for (j = 0; j < hvccBox.nalu_arrays[i].length; j++) {
-	    writer.writeUint16(hvccBox.nalu_arrays[i][j].data.length);
-		writer.writeUint8Array(hvccBox.nalu_arrays[i][j].data);
-	  }
-	}
+    writer.writeUint8(hvccBox.parallelismType + (63<<2));
+    writer.writeUint8(hvccBox.chroma_format_idc + (63<<2));
+    writer.writeUint8(hvccBox.bit_depth_luma_minus8 + (31<<3));
+    writer.writeUint8(hvccBox.bit_depth_chroma_minus8 + (31<<3));
+    writer.writeUint16(hvccBox.avgFrameRate);
+    writer.writeUint8((hvccBox.constantFrameRate<<6) +
+                   (hvccBox.numTemporalLayers<<3) +
+                   (hvccBox.temporalIdNested<<2) +
+                   hvccBox.lengthSizeMinusOne);
+    writer.writeUint8(hvccBox.nalu_arrays.length);
+    for (i = 0; i < hvccBox.nalu_arrays.length; i++) {
+      // bit(1) array_completeness + bit(1) reserved = 0 + bit(6) nal_unit_type
+      writer.writeUint8((hvccBox.nalu_arrays[i].completeness<<7) +
+                         hvccBox.nalu_arrays[i].nalu_type);
+      writer.writeUint16(hvccBox.nalu_arrays[i].length);
+      for (j = 0; j < hvccBox.nalu_arrays[i].length; j++) {
+        writer.writeUint16(hvccBox.nalu_arrays[i][j].data.length);
+        writer.writeUint8Array(hvccBox.nalu_arrays[i][j].data);
+      }
+    }
 
     return writer.getData();
   }
@@ -224,11 +215,11 @@ class MP4Demuxer {
     this.track = info.videoTracks[0];
 
     var extradata;
-	if (this.track.codec.startsWith('avc')) {
-	  extradata = this.getAvcExtradata(this.source.getAvccBox());
-	} else if (this.track.codec.startsWith('hvc') || this.track.codec.startsWith('hev')) {
-	  extradata = this.getHvcExtradata(this.source.getHvccBox());
-	}
+    if (this.track.codec.startsWith('avc')) {
+      extradata = this.getAvcExtradata(this.source.getAvccBox());
+    } else if (this.track.codec.startsWith('hvc') || this.track.codec.startsWith('hev')) {
+      extradata = this.getHvcExtradata(this.source.getHvccBox());
+    }
 
     let config = {
       codec: this.track.codec,
