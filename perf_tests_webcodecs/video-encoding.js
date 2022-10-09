@@ -5,7 +5,7 @@ function prepareFrames(width, height, count) {
   let timestamp = 0;
   const frames = [];
   for (let i = 0; i < count; i++) {
-    fourColorsFrame(ctx, width, height, timestamp.toString());
+    fourColorsFrame1(ctx, width, height, timestamp.toString());
     let frame = new VideoFrame(canvas, {timestamp: timestamp});
     frames.push(frame);
     timestamp += duration;
@@ -15,7 +15,7 @@ function prepareFrames(width, height, count) {
 
 async function testEncodingConfiguration(name, width, height, count, acc) {
   const encoder_config = {
-    codec: "avc1.42001E",
+    codec: "hev1.1.6.L120.B0",
     hardwareAcceleration: acc,
     width: width,
     height: height,
