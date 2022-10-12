@@ -70,6 +70,7 @@ function VideoEncoderError(err)
 	console.error("Video encoder error:", err);
 }
 
+
 async function Done()
 {
 	console.log("Done, flushing...");
