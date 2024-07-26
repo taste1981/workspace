@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WebCodec MP4 decode sample</title>
+</head>
+<body>
+  <p>
+    This demo decodes all frames from an MP4 file and renders them to a canvas as fast as possible.
+    It uses <a href="https://github.com/gpac/mp4box.js/">mp4box.js</a> for demuxing.
+  </p>
+
+  <p>
+    Note: The WebGPU rendering mode is not yet available in all browsers.
+    As of M108, Chrome requires the <code>--enable-unsafe-webgpu</code> flag.
+  </p>
+
+  <p>
+    Renderer:
+    <label for="renderer_2d">
+      <input id="renderer_2d" type="radio" name="renderer" value="2d" checked> 2D
+    </label>
+    <label for="renderer_webgl">
+      <input id="renderer_webgl" type="radio" name="renderer" value="webgl"> WebGL
+    </label>
+    <label for="renderer_webgl2">
+      <input id="renderer_webgl2" type="radio" name="renderer" value="webgl2"> WebGL 2
+    </label>
+    <label for="renderer_webgpu">
+      <input id="renderer_webgpu" type="radio" name="renderer" value="webgpu"> WebGPU
+    </label>
+  </p>
+
+  <p>
+    Video Codec:
+    <label for="video_codec_h264">
+      <input id="video_codec_h264" type="radio" name="video_codec" value="avc" checked> H.264
+    </label>
+    <label for="video_codec_h265">
+      <input id="video_codec_h265" type="radio" name="video_codec" value="hevc"> H.265
+    </label>
+    <label for="video_codec_vp8">
+      <input id="video_codec_vp8" type="radio" name="video_codec" value="vp8"> VP8
+    </label>
+    <label for="video_codec_vp9">
+      <input id="video_codec_vp9" type="radio" name="video_codec" value="vp9"> VP9
+    </label>
+    <label for="video_codec_av1">
+      <input id="video_codec_av1" type="radio" name="video_codec" value="av1"> AV1
+    </label>
+    <label for="video_codec_h266">
+      <input id="video_codec_vvc" type="radio" name="video_codec" value="vvc"> VVC
+    </label>
+  </p>
+
+  <p>
+    <button id="start">Start</button>
+  </p>
+
+  <table cellspacing="8" id="status">
+    <tr><th align="right">Fetch</th><td id="fetch">Not started</td></tr>
+    <tr><th align="right">Demux</th><td id="demux">Not started</td></tr>
+    <tr><th align="right">Decode</th><td id="decode">Not started</td></tr>
+    <tr><th align="right">Render</th><td id="render">Not started</td></tr>
+  </table>
+
+  <canvas></canvas>
+
+  <script type="module">
+    // Play button.
+    const startButton = document.querySelector("#start");
+    startButton.addEventListener("click", () => {
+      document.querySelectorAll("input").forEach(input => input.disabled = true);
+      startButton.disabled = true;
+      start();
+    }, {once: true});
+
+    // Status UI.
+    const status = {
+      fetch: document.querySelector("#fetch"),
+      demux: document.querySelector("#demux"),
+      decode: document.querySelector("#decode"),
+      render: document.querySelector("#render"),
+    };
+
+    function setStatus(message) {
+      for (const key in message.data) {
+        status[key].innerText = message.data[key];
+      }
+    }
+
+    // Worker setup.
+    function start() {
+      const videoCodec = document.querySelector("input[name=\"video_codec\"]:checked").value;
+      const dataUri = `../data/bbb_video_${videoCodec}_frag.mp4`;
+      const rendererName = document.querySelector("input[name=\"renderer\"]:checked").value;
+      const canvas = document.querySelector("canvas").transferControlToOffscreen();
+      const worker = new Worker("./worker.js");
+      worker.addEventListener("message", setStatus);
+      worker.postMessage({dataUri, rendererName, canvas}, [canvas]);
+    }
+  </script>
+</body>
+</html>
+
