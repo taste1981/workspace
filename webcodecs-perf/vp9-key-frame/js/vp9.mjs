@@ -16,6 +16,8 @@ document.getElementById('start-encoding')
         keyFrames = 3;
       } else if (keyFrameMode === 'consecutive') {
         keyFrames = 2;
+      } else if (keyFrameMode === 'hybrid-ext') {
+        keyFrames = 7;
       }
       encodingTest.configure(keyFrames,
           document.getElementById('resolutions-select').value,

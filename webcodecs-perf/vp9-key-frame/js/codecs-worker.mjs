@@ -43,7 +43,7 @@ function configure(newKeyFramesRemaining,
 }
 
 function onRawFrame(frame) {
-  if (keyFramesRemaining == 4) {
+  if (keyFramesRemaining == 4 || keyFramesRemaining == 6) {
     const encoderConfig = {
       codec: vp9,
       width: 640,
@@ -57,11 +57,14 @@ function onRawFrame(frame) {
     encoder.configure(encoderConfig); 
   }
   let is_keyframe = (keyFramesRemaining > 0 || keyFrameRequested) ? true : false;
+  if (keyFramesRemaining == 6) {
+    is_keyframe = false;
+  }
   console.warn(`Encoding frame, keyframe: ${is_keyframe}, keyFramesRemaining: ${keyFramesRemaining}`);
   encoder.encode(frame, { keyFrame: is_keyframe });
   frame.close();
   if (keyFramesRemaining > 0) {
-    if (keyFramesRemaining == 4) {
+    if (keyFramesRemaining == 4 || keyFramesRemaining == 6) {
       keyFramesRemaining = 0;
     }
     keyFramesRemaining--;
