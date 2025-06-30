@@ -1,0 +1,41 @@
+<html>
+<meta charset="utf-8">
+
+<head>
+  <title>WebCodecs VP9 Test</title>
+  <style>
+    html {
+      font-family: Lato;
+    }
+
+    .buttons {
+      margin: 2em 0;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>WebCodecs VP9 encoding</h1>
+  <p>Key frame mode: </p>
+  <p><input type="radio" name="key-frame" value="single"/>single - the first frame is a key frame</p>
+  <p><input type="radio" name="key-frame" id="key-frame-consecutive" value="consecutive" checked/>consecutive - the first two frames are key frames</p>
+  <p><input type="radio" name="key-frame" id="key-frame-triple" value="triple">triple - the first three frames are key frames</p>
+  <p><input type="radio" name="key-frame" id="key-frame-resolution-change" value="hybrid">hybrid - the second key frame changes resolution</p>
+  <p>Resolution: <select id="resolutions-select"></select></p>
+  <p style="display:none">Scalability mode: <select id="scalability-select"></select></p>
+  <p>Hardware acceleration: <select id="hw-select"></select></p>
+  <div class="buttons">
+    <button type="button" id="start-encoding">Start encoding</button>
+    <button type="button" id="key-frame-request">Request a key frame</button>
+  </div>
+  <p id="stats"></p>
+  <div>
+    <p>Left is camera preview, right is WebCodecs encoded and decoded stream</p>
+    <video id="local-preview" controls width="320" height="240"></video>
+    <video id="playback" controls width="320" height="240"></video>
+  </div>
+  <script type="module" src="js/vp9.mjs"></script>
+</body>
+<link href='https://fonts.googleapis.com/css?family=Lato' rel='stylesheet' type='text/css'>
+
+</html>
