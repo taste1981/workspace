@@ -1,0 +1,1022 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Virtual Background Effect</title>
+  <style>
+    video,
+    canvas {
+      position: absolute;
+      top: 20;
+      left: 0;
+      transform: scaleX(-1);
+    }
+
+    canvas {
+      z-index: 1;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="status" style="font: 1em sans-serif">Select renderer and click Start to begin video processing</div>
+  
+  <div style="margin-bottom: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9; width: 600px;">
+    <h3 style="margin-top: 0;">Renderer Selection</h3>
+    <label style="font: 1em sans-serif; display: block; margin-bottom: 10px;">
+      <input type="radio" name="renderer" value="webgl2" checked /> WebGL2 (Compatible)
+    </label>
+    <label style="font: 1em sans-serif; display: block; margin-bottom: 15px;">
+      <input type="radio" name="renderer" value="webgpu" id="webgpuRadio" /> WebGPU (Advanced, requires compatible browser)
+    </label>
+    <button id="startButton" style="padding: 10px 20px; font-size: 16px; background-color: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer;">
+      Start Video Processing
+    </button>
+    <button id="stopButton" style="padding: 10px 20px; font-size: 16px; background-color: #f44336; color: white; border: none; border-radius: 5px; cursor: pointer; margin-left: 10px; display: none;">
+      Stop
+    </button>
+  </div>
+  
+  <div style="margin-bottom: 10px; display: none;" id="runtimeControls">
+    <label style="font: 1em sans-serif;">
+      <input type="checkbox" id="useWebGPU" /> Switch to WebGPU (runtime switching)
+    </label>
+  </div>
+  <div>
+    <video id="webcam" autoplay playsinline muted style="display: none;"></video>
+    <canvas id="output" style="display: none;"></canvas>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-segmentation"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js"
+    crossorigin="anonymous"></script>
+  <script>
+    var QueryString = function() {
+      // Allows access to query parameters on the URL; e.g., given a URL like:
+      //    http://<server>/my.html?test=123&bob=123
+      // Parameters can then be accessed via QueryString.test or QueryString.bob.
+      var params = {};
+      // RegEx to split out values by &.
+      var r = /([^&=]+)=?([^&]*)/g;
+      // Lambda function for decoding extracted match values. Replaces '+' with
+      // space so decodeURIComponent functions properly.
+      function d(s) { return decodeURIComponent(s.replace(/\+/g, ' ')); }
+      var match;
+      while (match = r.exec(window.location.search.substring(1)))
+        params[d(match[1])] = d(match[2]);
+      return params;
+    }();
+
+    // Get median value from an array of Number
+    function getMedianValue(array) {
+      array = array.sort((a, b) => a - b);
+      return array.length % 2 !== 0 ? array[Math.floor(array.length / 2)] :
+        (array[array.length / 2 - 1] + array[array.length / 2]) / 2;
+    }
+
+    async function run() {
+      const startRun = performance.now();
+      let count = 0;
+      const segmentTimes = [];
+      const status = document.getElementById('status');
+      const video = document.getElementById('webcam');
+      const canvas = document.getElementById('output');
+      const ctx = canvas.getContext('2d');
+      const useWebGPUCheckbox = document.getElementById('useWebGPU');
+      const vbFps = 24;
+      let blurRenderer = null;
+      let segmenter = null;
+      
+      // Create a separate canvas for MediaPipe input
+      const inputCanvas = document.createElement('canvas');
+      const inputCtx = inputCanvas.getContext('2d');
+
+      // Initialize CPU-only segmenter using MediaPipe
+      async function initializeSegmenter() {
+        try {
+          // CPU-based segmentation using MediaPipe
+          segmenter = await bodySegmentation.createSegmenter(
+            bodySegmentation.SupportedModels.MediaPipeSelfieSegmentation,
+            {
+              runtime: 'mediapipe',
+              modelType: 'landscape',
+              solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation',
+            }
+          );
+          console.log('Using CPU (MediaPipe) for segmentation');
+          
+          // Update status to show segmentation method
+          const rendererType = useWebGPUCheckbox.checked ? 'WebGPU' : 'WebGL2';
+          status.innerText = `Segmentation: CPU (MediaPipe) | Renderer: ${rendererType}`;
+          
+        } catch (error) {
+          console.error('Failed to initialize CPU segmentation:', error);
+          status.innerText = 'Segmentation initialization failed';
+        }
+      }
+
+      // Initialize blur renderer based on checkbox
+      async function initializeBlurRenderer() {
+        const useWebGPU = useWebGPUCheckbox.checked;
+        try {
+          if (useWebGPU && 'gpu' in navigator) {
+            blurRenderer = await createWebGPUBlurRenderer(canvas);
+            // Set up MediaStreamTrackProcessor for WebGPU if stream is available
+            if (appStream && blurRenderer.setupTrackProcessor) {
+              blurRenderer.setupTrackProcessor(appStream);
+            }
+            status.innerText = 'Renderer: WebGPU';
+            console.log('Using WebGPU for blur rendering');
+          } else {
+            blurRenderer = createWebGL2BlurRenderer(canvas);
+            status.innerText = 'Renderer: WebGL2';
+            console.log('Using WebGL2 for blur rendering');
+          }
+        } catch (error) {
+          console.warn(`Failed to initialize ${useWebGPU ? 'WebGPU' : 'WebGL2'} renderer:`, error);
+          // Fallback to WebGL2 if WebGPU fails
+          if (useWebGPU) {
+            blurRenderer = createWebGL2BlurRenderer(canvas);
+            status.innerText = 'Renderer: WebGL2 (WebGPU fallback)';
+            useWebGPUCheckbox.checked = false;
+          }
+        }
+      }
+
+      // WebGL2 blur renderer
+      function createWebGL2BlurRenderer(canvas) {
+        // Create a separate canvas for WebGL2 to avoid context conflicts
+        const webglCanvas = document.createElement('canvas');
+        webglCanvas.width = canvas.width;
+        webglCanvas.height = canvas.height;
+        
+        const gl = webglCanvas.getContext('webgl2');
+        if (!gl) throw new Error('WebGL2 not supported');
+
+        // Simple blur implementation using WebGL2
+        const vertexShaderSource = `#version 300 es
+          in vec2 a_position;
+          in vec2 a_texCoord;
+          out vec2 v_texCoord;
+          void main() {
+            gl_Position = vec4(a_position, 0.0, 1.0);
+            v_texCoord = a_texCoord;
+          }
+        `;
+
+        const fragmentShaderSource = `#version 300 es
+          precision highp float;
+          in vec2 v_texCoord;
+          out vec4 fragColor;
+          uniform sampler2D u_image;
+          uniform sampler2D u_mask;
+          uniform vec2 u_resolution;
+          uniform float u_blurAmount;
+          
+          vec4 blur(sampler2D image, vec2 uv, float amount) {
+            vec4 color = vec4(0.0);
+            float total = 0.0;
+            for(int x = -4; x <= 4; x++) {
+              for(int y = -4; y <= 4; y++) {
+                vec2 offset = vec2(float(x), float(y)) * amount / u_resolution;
+                float weight = 1.0 / (1.0 + length(vec2(x, y)));
+                color += texture(image, uv + offset) * weight;
+                total += weight;
+              }
+            }
+            return color / total;
+          }
+          
+          void main() {
+            vec4 originalColor = texture(u_image, v_texCoord);
+            vec4 blurredColor = blur(u_image, v_texCoord, u_blurAmount);
+            float mask = texture(u_mask, v_texCoord).r;
+            fragColor = mix(blurredColor, originalColor, mask);
+          }
+        `;
+
+        // Create and compile shaders, program, etc.
+        const program = createProgram(gl, vertexShaderSource, fragmentShaderSource);
+        
+        // Set up geometry and buffers
+        const positions = new Float32Array([
+          -1, -1, 0, 1,  // Bottom-left: flipped Y texture coordinate
+           1, -1, 1, 1,  // Bottom-right: flipped Y texture coordinate
+          -1,  1, 0, 0,  // Top-left: flipped Y texture coordinate
+           1,  1, 1, 0,  // Top-right: flipped Y texture coordinate
+        ]);
+        
+        const positionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+        
+        // Create textures
+        const videoTexture = gl.createTexture();
+        const maskTexture = gl.createTexture();
+        
+        const positionLocation = gl.getAttribLocation(program, 'a_position');
+        const texCoordLocation = gl.getAttribLocation(program, 'a_texCoord');
+        const imageLocation = gl.getUniformLocation(program, 'u_image');
+        const maskLocation = gl.getUniformLocation(program, 'u_mask');
+        const resolutionLocation = gl.getUniformLocation(program, 'u_resolution');
+        const blurAmountLocation = gl.getUniformLocation(program, 'u_blurAmount');
+        
+        return {
+          render: (videoElement, maskImageData) => {
+            // WebGL2 rendering implementation with actual blur effect
+            renderWithWebGL2(gl, program, videoElement, maskImageData, {
+              positionBuffer, videoTexture, maskTexture,
+              positionLocation, texCoordLocation, imageLocation, 
+              maskLocation, resolutionLocation, blurAmountLocation,
+              webglCanvas
+            });
+            
+            // Copy the WebGL result to the main canvas
+            const mainCtx = canvas.getContext('2d');
+            mainCtx.clearRect(0, 0, canvas.width, canvas.height);
+            mainCtx.drawImage(webglCanvas, 0, 0);
+          }
+        };
+      }
+
+      // WebGPU blur renderer
+      async function createWebGPUBlurRenderer(canvas) {
+        // Create a separate canvas for WebGPU to avoid context conflicts
+        const webgpuCanvas = document.createElement('canvas');
+        webgpuCanvas.width = canvas.width;
+        webgpuCanvas.height = canvas.height;
+        
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) {
+          throw new Error('WebGPU adapter not available');
+        }
+        
+        const device = await adapter.requestDevice();
+        const context = webgpuCanvas.getContext('webgpu');
+        
+        if (!context) {
+          throw new Error('WebGPU context not available');
+        }
+        
+        const format = 'bgra8unorm';
+        context.configure({
+          device: device,
+          format: format,
+        });
+
+        // WebGPU compute shader for blur effect
+        const computeShaderCode = `
+          @group(0) @binding(0) var inputTexture: texture_2d<f32>;
+          @group(0) @binding(1) var maskTexture: texture_2d<f32>;
+          @group(0) @binding(2) var outputTexture: texture_storage_2d<rgba8unorm, write>;
+          
+          @compute @workgroup_size(8, 8)
+          fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+            let inputDims = textureDimensions(inputTexture);
+            let maskDims = textureDimensions(maskTexture);
+            
+            if (global_id.x >= inputDims.x || global_id.y >= inputDims.y) {
+              return;
+            }
+            
+            let coord = vec2<i32>(i32(global_id.x), i32(global_id.y));
+            
+            // Sample the original color
+            let originalColor = textureLoad(inputTexture, coord, 0);
+            
+            // Calculate corresponding mask coordinate (handle different dimensions)
+            let maskCoord = vec2<i32>(
+              i32(f32(global_id.x) * f32(maskDims.x) / f32(inputDims.x)),
+              i32(f32(global_id.y) * f32(maskDims.y) / f32(inputDims.y))
+            );
+            
+            // Clamp mask coordinates to valid range
+            let clampedMaskCoord = vec2<i32>(
+              clamp(maskCoord.x, 0, i32(maskDims.x) - 1),
+              clamp(maskCoord.y, 0, i32(maskDims.y) - 1)
+            );
+            
+            let mask = textureLoad(maskTexture, clampedMaskCoord, 0).r;
+            
+            // Apply blur only to background (mask < 0.5)
+            // Note: mask values are typically 0 for background, 1 for foreground
+            var finalColor = originalColor;
+            if (mask < 0.5) {
+              // Apply blur effect to background - increased kernel size to match WebGL2
+              var blurredColor = vec4<f32>(0.0);
+              var totalWeight = 0.0;
+              
+              // Use 9x9 kernel like WebGL2 (from -4 to +4)
+              for (var x = -4; x <= 4; x++) {
+                for (var y = -4; y <= 4; y++) {
+                  let sampleCoord = coord + vec2<i32>(x, y);
+                  if (sampleCoord.x >= 0 && sampleCoord.x < i32(inputDims.x) && 
+                      sampleCoord.y >= 0 && sampleCoord.y < i32(inputDims.y)) {
+                    // Use same weighting as WebGL2: 1.0 / (1.0 + distance)
+                    let distance = length(vec2<f32>(f32(x), f32(y)));
+                    let weight = 1.0 / (1.0 + distance);
+                    blurredColor += textureLoad(inputTexture, sampleCoord, 0) * weight;
+                    totalWeight += weight;
+                  }
+                }
+              }
+              blurredColor /= totalWeight;
+              finalColor = blurredColor;
+            }
+            
+            // Debug: visualize mask by tinting background blue for testing
+            // This will help us see if the mask is working correctly
+            if (mask < 0.5) {
+              finalColor = mix(finalColor, vec4<f32>(0.2, 0.2, 1.0, 1.0), 0.3); // Blue tint for background
+            }
+            
+            textureStore(outputTexture, coord, finalColor);
+          }
+        `;
+
+        const computeShader = device.createShaderModule({
+          code: computeShaderCode,
+        });
+
+        const computePipeline = device.createComputePipeline({
+          layout: 'auto',
+          compute: {
+            module: computeShader,
+            entryPoint: 'main',
+          },
+        });
+
+        // Set up MediaStreamTrackProcessor for getting VideoFrames
+        let trackProcessor = null;
+        let reader = null;
+        
+        const setupTrackProcessor = (stream) => {
+          if (trackProcessor) {
+            try {
+              reader?.cancel();
+            } catch (e) {
+              console.warn('Error canceling reader:', e);
+            }
+          }
+          
+          const videoTrack = stream.getVideoTracks()[0];
+          if (!videoTrack) {
+            console.error('No video track found in stream');
+            return false;
+          }
+          
+          try {
+            trackProcessor = new MediaStreamTrackProcessor({ track: videoTrack });
+            reader = trackProcessor.readable.getReader();
+            
+            console.log('MediaStreamTrackProcessor initialized for WebGPU');
+            return true;
+          } catch (error) {
+            console.warn('MediaStreamTrackProcessor not supported, falling back to canvas approach:', error);
+            return false;
+          }
+        };
+        
+        return {
+          render: async (videoElement, maskImageData) => {
+            // Update canvas size if needed
+            if (webgpuCanvas.width !== videoElement.videoWidth || webgpuCanvas.height !== videoElement.videoHeight) {
+              webgpuCanvas.width = videoElement.videoWidth;
+              webgpuCanvas.height = videoElement.videoHeight;
+              // Reconfigure context with new size
+              context.configure({
+                device: device,
+                format: format,
+              });
+            }
+            
+            // WebGPU rendering implementation
+            await renderWithWebGPU(device, context, computePipeline, videoElement, maskImageData, webgpuCanvas, trackProcessor, reader);
+          },
+          setupTrackProcessor: setupTrackProcessor
+        };
+      }
+
+      // Helper function to create WebGL program
+      function createProgram(gl, vertexSource, fragmentSource) {
+        const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexSource);
+        const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
+        const program = gl.createProgram();
+        gl.attachShader(program, vertexShader);
+        gl.attachShader(program, fragmentShader);
+        gl.linkProgram(program);
+        return program;
+      }
+
+      function createShader(gl, type, source) {
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+        return shader;
+      }
+
+      function renderWithWebGL2(gl, program, videoElement, maskImageData, resources) {
+        const { positionBuffer, videoTexture, maskTexture, 
+                positionLocation, texCoordLocation, imageLocation, 
+                maskLocation, resolutionLocation, blurAmountLocation, webglCanvas } = resources;
+        
+        // Update canvas size if needed
+        if (webglCanvas.width !== videoElement.videoWidth || webglCanvas.height !== videoElement.videoHeight) {
+          webglCanvas.width = videoElement.videoWidth;
+          webglCanvas.height = videoElement.videoHeight;
+        }
+        
+        gl.viewport(0, 0, webglCanvas.width, webglCanvas.height);
+        gl.useProgram(program);
+        
+        // Update video texture
+        gl.bindTexture(gl.TEXTURE_2D, videoTexture);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, videoElement);
+        
+        // Update mask texture
+        gl.bindTexture(gl.TEXTURE_2D, maskTexture);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, maskImageData);
+        
+        // Set up vertex attributes
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.enableVertexAttribArray(positionLocation);
+        gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 16, 0);
+        gl.enableVertexAttribArray(texCoordLocation);
+        gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 16, 8);
+        
+        // Set uniforms
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, videoTexture);
+        gl.uniform1i(imageLocation, 0);
+        
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, maskTexture);
+        gl.uniform1i(maskLocation, 1);
+        
+        gl.uniform2f(resolutionLocation, webglCanvas.width, webglCanvas.height);
+        gl.uniform1f(blurAmountLocation, 6.0); // Blur amount
+        
+        // Draw
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      }
+
+      async function renderWithWebGPU(device, context, computePipeline, videoElement, maskImageData, webgpuCanvas, trackProcessor, reader) {
+        try {
+          console.log('Attempting WebGPU rendering...');
+          
+          // Update canvas size if needed
+          if (webgpuCanvas.width !== videoElement.videoWidth || webgpuCanvas.height !== videoElement.videoHeight) {
+            webgpuCanvas.width = videoElement.videoWidth;
+            webgpuCanvas.height = videoElement.videoHeight;
+            context.configure({
+              device: device,
+              format: 'bgra8unorm',
+            });
+          }
+          
+          const width = webgpuCanvas.width;
+          const height = webgpuCanvas.height;
+          
+          // Create textures for input video and mask
+          let videoTexture = device.createTexture({
+            size: [width, height, 1],
+            format: 'rgba8unorm',
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+          });
+          
+          const maskTexture = device.createTexture({
+            size: [maskImageData.width, maskImageData.height, 1],
+            format: 'rgba8unorm',
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+          });
+          
+          const outputTexture = device.createTexture({
+            size: [width, height, 1],
+            format: 'rgba8unorm',
+            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC | GPUTextureUsage.TEXTURE_BINDING,
+          });
+          
+          // Upload video data to GPU using copyExternalImageToTexture if available, fallback to tempCanvas
+          let videoUploaded = false;
+          let actualVideoWidth = width;
+          let actualVideoHeight = height;
+          
+          if (trackProcessor && reader) {
+            // Try to read a VideoFrame from MediaStreamTrackProcessor (non-blocking check)
+            try {
+              const readResult = await reader.read();
+              if (!readResult.done && readResult.value) {
+                const videoFrame = readResult.value;
+                
+                // Update dimensions based on VideoFrame
+                actualVideoWidth = videoFrame.displayWidth;
+                actualVideoHeight = videoFrame.displayHeight;
+                
+                // Recreate video texture with correct dimensions
+                videoTexture.destroy();
+                videoTexture = device.createTexture({
+                  size: [actualVideoWidth, actualVideoHeight, 1],
+                  format: 'rgba8unorm',
+                  usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+                });
+                
+                try {
+                  // Use copyExternalImageToTexture for efficient GPU upload
+                  device.queue.copyExternalImageToTexture(
+                    { source: videoFrame },
+                    { texture: videoTexture },
+                    [actualVideoWidth, actualVideoHeight, 1]
+                  );
+                  videoFrame.close(); // Important: release the VideoFrame
+                  console.log('Video data uploaded via copyExternalImageToTexture');
+                  videoUploaded = true;
+
+                } catch (error) {
+                  console.warn('copyExternalImageToTexture failed, falling back to canvas approach:', error);
+                  videoFrame.close(); // Still need to close the frame
+                }
+              }
+            } catch (error) {
+              console.warn('Failed to read VideoFrame, falling back to canvas approach:', error);
+            }
+          }
+          
+          // Upload mask data to GPU
+          device.queue.writeTexture(
+            { texture: maskTexture },
+            maskImageData.data,
+            { bytesPerRow: maskImageData.width * 4 },
+            [maskImageData.width, maskImageData.height, 1]
+          );
+          
+          // Create bind group
+          const bindGroup = device.createBindGroup({
+            layout: computePipeline.getBindGroupLayout(0),
+            entries: [
+              {
+                binding: 0,
+                resource: videoTexture.createView(),
+              },
+              {
+                binding: 1,
+                resource: maskTexture.createView(),
+              },
+              {
+                binding: 2,
+                resource: outputTexture.createView(),
+              },
+            ],
+          });
+          
+          // Run compute shader
+          const commandEncoder = device.createCommandEncoder();
+          const computePass = commandEncoder.beginComputePass();
+          computePass.setPipeline(computePipeline);
+          computePass.setBindGroup(0, bindGroup);
+          
+          const workgroupCountX = Math.ceil(width / 8);
+          const workgroupCountY = Math.ceil(height / 8);
+          computePass.dispatchWorkgroups(workgroupCountX, workgroupCountY);
+          computePass.end();
+          
+          // Create a simple render pipeline to copy rgba to bgra canvas
+          const vertexShader = device.createShaderModule({
+            code: `
+              @vertex
+              fn main(@builtin(vertex_index) vertexIndex: u32) -> @builtin(position) vec4<f32> {
+                var pos = array<vec2<f32>, 6>(
+                  vec2<f32>(-1.0, -1.0),
+                  vec2<f32>( 1.0, -1.0),
+                  vec2<f32>(-1.0,  1.0),
+                  vec2<f32>( 1.0, -1.0),
+                  vec2<f32>( 1.0,  1.0),
+                  vec2<f32>(-1.0,  1.0)
+                );
+                return vec4<f32>(pos[vertexIndex], 0.0, 1.0);
+              }
+            `
+          });
+          
+          const fragmentShader = device.createShaderModule({
+            code: `
+              @group(0) @binding(0) var inputTexture: texture_2d<f32>;
+              @group(0) @binding(1) var textureSampler: sampler;
+              
+              @fragment
+              fn main(@builtin(position) coord: vec4<f32>) -> @location(0) vec4<f32> {
+                let uv = coord.xy / vec2<f32>(${width}.0, ${height}.0);
+                return textureSample(inputTexture, textureSampler, uv);
+              }
+            `
+          });
+          
+          const renderPipeline = device.createRenderPipeline({
+            layout: 'auto',
+            vertex: {
+              module: vertexShader,
+              entryPoint: 'main',
+            },
+            fragment: {
+              module: fragmentShader,
+              entryPoint: 'main',
+              targets: [{
+                format: 'bgra8unorm',
+              }],
+            },
+            primitive: {
+              topology: 'triangle-list',
+            },
+          });
+          
+          const sampler = device.createSampler({
+            magFilter: 'linear',
+            minFilter: 'linear',
+          });
+          
+          const renderBindGroup = device.createBindGroup({
+            layout: renderPipeline.getBindGroupLayout(0),
+            entries: [
+              {
+                binding: 0,
+                resource: outputTexture.createView(),
+              },
+              {
+                binding: 1,
+                resource: sampler,
+              },
+            ],
+          });
+          
+          // Render to canvas
+          const canvasTexture = context.getCurrentTexture();
+          const renderPass = commandEncoder.beginRenderPass({
+            colorAttachments: [{
+              view: canvasTexture.createView(),
+              clearValue: { r: 0, g: 0, b: 0, a: 1 },
+              loadOp: 'clear',
+              storeOp: 'store',
+            }],
+          });
+          
+          renderPass.setPipeline(renderPipeline);
+          renderPass.setBindGroup(0, renderBindGroup);
+          renderPass.draw(6);
+          renderPass.end();
+          
+          device.queue.submit([commandEncoder.finish()]);
+          
+          // Copy WebGPU canvas to main canvas
+          const mainCtx = canvas.getContext('2d');
+          mainCtx.clearRect(0, 0, canvas.width, canvas.height);
+          mainCtx.drawImage(webgpuCanvas, 0, 0);
+          
+          // Clean up textures
+          videoTexture.destroy();
+          maskTexture.destroy();
+          outputTexture.destroy();
+          
+        } catch (error) {
+          console.warn('WebGPU rendering failed, falling back to 2D canvas:', error);
+        }
+      }
+
+      function applySimpleBlur(imageData, maskImageData) {
+        console.log('Applying simple blur with mask data');
+        
+        // Validate input data
+        if (!imageData || !imageData.data || imageData.width <= 0 || imageData.height <= 0) {
+          console.error('Invalid imageData:', imageData);
+          return imageData;
+        }
+        
+        if (!maskImageData || !maskImageData.data || maskImageData.width <= 0 || maskImageData.height <= 0) {
+          console.error('Invalid maskImageData:', maskImageData);
+          return imageData;
+        }
+        
+        // Simple blur implementation for fallback
+        const data = imageData.data;
+        const maskData = maskImageData.data;
+        const width = imageData.width;
+        const height = imageData.height;
+        
+        // Create a copy for output with validation
+        const outputData = new ImageData(width, height);
+        const output = outputData.data;
+        
+        // Scale factors for mask vs image dimensions
+        const maskWidth = maskImageData.width;
+        const maskHeight = maskImageData.height;
+        const scaleX = maskWidth / width;
+        const scaleY = maskHeight / height;
+        
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const idx = (y * width + x) * 4;
+            
+            // Get corresponding mask pixel
+            const maskX = Math.floor(x * scaleX);
+            const maskY = Math.floor(y * scaleY);
+            const maskIdx = (maskY * maskWidth + maskX) * 4;
+            const maskValue = maskData[maskIdx] / 255; // Normalize mask value
+            
+            if (maskValue < 0.5) { // Background pixel, apply blur
+              // Stronger 5x5 blur for more visible effect
+              let r = 0, g = 0, b = 0, count = 0;
+              for (let dy = -2; dy <= 2; dy++) {
+                for (let dx = -2; dx <= 2; dx++) {
+                  const nx = x + dx;
+                  const ny = y + dy;
+                  if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                    const nidx = (ny * width + nx) * 4;
+                    r += data[nidx];
+                    g += data[nidx + 1];
+                    b += data[nidx + 2];
+                    count++;
+                  }
+                }
+              }
+              output[idx] = r / count;
+              output[idx + 1] = g / count;
+              output[idx + 2] = b / count;
+              output[idx + 3] = data[idx + 3];
+            } else { // Foreground pixel, keep original
+              output[idx] = data[idx];
+              output[idx + 1] = data[idx + 1];
+              output[idx + 2] = data[idx + 2];
+              output[idx + 3] = data[idx + 3];
+            }
+          }
+        }
+        return outputData;
+      }
+
+      // Initialize both segmenter and renderer
+      await initializeSegmenter();
+      await initializeBlurRenderer();
+
+      // Handle renderer switching
+      useWebGPUCheckbox.addEventListener('change', async () => {
+        if (!isRunning) return;
+        status.innerText = 'Switching renderer...';
+        await initializeBlurRenderer();
+        // Update status to show renderer
+        const rendererType = useWebGPUCheckbox.checked ? 'WebGPU' : 'WebGL2';
+        status.innerText = `Segmentation: CPU (MediaPipe) | Renderer: ${rendererType}`;
+        // Reset counters when switching renderers
+        count = 0;
+        segmentTimes.length = 0;
+      });
+
+      // Use the existing stream from app initialization
+      video.srcObject = appStream;
+      await new Promise((resolve) => (video.onloadedmetadata = resolve));
+
+      // If modelType is landscape, the model resolution is 256x144.
+      // If modelType is general, the model resolution is 256x256.
+      // Initialize segmenter
+      await initializeSegmenter();
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      
+      // Set up input canvas for MediaPipe (same dimensions as video)
+      inputCanvas.width = video.videoWidth;
+      inputCanvas.height = video.videoHeight;
+
+      async function render() {
+        if (!isRunning) return;
+        if (video.readyState < 2 || video.videoWidth === 0) {
+          // Not ready yet
+          if (isRunning) {
+            if (QueryString.fps !== '24') {
+              requestAnimationFrame(render);
+            }
+          }
+          return;
+        }
+        
+        const start = performance.now();
+        
+        // Draw current video frame to input canvas for MediaPipe processing
+        inputCtx.drawImage(video, 0, 0, inputCanvas.width, inputCanvas.height);
+        
+        // Pass the input canvas to MediaPipe instead of the video element
+        const segmentation = await segmenter.segmentPeople(inputCanvas);
+
+        // Readback mask data from CPU segmentation
+        let maskImageData = null;
+        for (let segment of segmentation) {
+          const mask = segment.mask;
+          try {
+            console.log('Converting CPU mask to ImageData...');
+            maskImageData = await mask.toImageData();
+            
+            // Validate mask data
+            if (!maskImageData || maskImageData.width <= 0 || maskImageData.height <= 0) {
+              console.error('Invalid mask data:', maskImageData);
+              maskImageData = null;
+            } else {
+              console.log('Valid mask data:', maskImageData.width, 'x', maskImageData.height);
+            }
+            
+            break; // Use first segment
+          } catch (error) {
+            console.error('Failed to convert mask to ImageData:', error);
+            maskImageData = null;
+          }
+        }
+
+        const segmentTime = performance.now() - start;
+        const minutes = 1;
+        count++;
+        if (((performance.now() - startRun) <= 1000 * 60 * minutes)) { // only record for 1 minute
+          console.log(`Segmentation time ${count}: ${segmentTime.toFixed(2)} ms`);
+          if (count > 3) {
+            // Skip first 3 inferences, treat as warmup
+            segmentTimes.push(segmentTime);
+          }
+        } else {
+          if (status.innerText.includes('Segmentation:') && !status.innerText.includes('median time:')) {
+            const medianTime = getMedianValue(segmentTimes);
+            const rendererType = useWebGPUCheckbox.checked ? 'WebGPU' : 'WebGL2';
+            status.innerText = `Segmentation: CPU (MediaPipe) | Renderer: ${rendererType} | Running ${minutes} minute(s), median time: ${medianTime.toFixed(2)} ms`;
+          }
+        }
+
+        // Use our custom blur renderer (WebGPU or WebGL2)
+        if (blurRenderer && maskImageData) {
+          try {
+            await blurRenderer.render(video, maskImageData);
+          } catch (error) {
+            console.error('Blur rendering failed:', error);
+            // Fallback to simple video display
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          }
+        } else {
+          // Fallback to simple canvas rendering
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        }
+
+        if (QueryString.fps !== '24') {
+          if (isRunning) requestAnimationFrame(render);
+        }
+      }
+
+      let renderInterval = null;
+      
+      if (QueryString.fps === '24') {
+        renderInterval = setInterval(() => {
+          if (isRunning) render();
+        }, 1000/vbFps);
+      } else {
+        render();
+      }
+    }
+
+    // Global variables for app state
+    let appStartRun = null;
+    let appCount = 0;
+    let appSegmentTimes = [];
+    let appBlurRenderer = null;
+    let appSegmenter = null;
+    let appStream = null;
+    let isRunning = false;
+    
+    // Get DOM elements for app control
+    const startButton = document.getElementById('startButton');
+    const stopButton = document.getElementById('stopButton');
+    const runtimeControls = document.getElementById('runtimeControls');
+    const webgpuRadio = document.getElementById('webgpuRadio');
+    const appStatus = document.getElementById('status');
+    const appVideo = document.getElementById('webcam');
+    const appCanvas = document.getElementById('output');
+    const appUseWebGPUCheckbox = document.getElementById('useWebGPU');
+    
+    // Check browser compatibility
+    const hasWebGPU = 'gpu' in navigator;
+    
+    // Initialize compatibility info
+    function initializeCompatibilityInfo() {
+      if (!hasWebGPU) {
+        webgpuRadio.disabled = true;
+        webgpuRadio.parentElement.innerHTML = '<input type="radio" name="renderer" value="webgpu" disabled /> WebGPU (Not supported in this browser)';
+      }
+    }
+
+    async function startVideoProcessing() {
+      if (isRunning) return;
+      try {
+        startButton.disabled = true;
+        startButton.textContent = 'Starting...';
+        appStatus.textContent = 'Initializing...';
+        
+        const selectedRenderer = document.querySelector('input[name="renderer"]:checked').value;
+        const useWebGPU = selectedRenderer === 'webgpu';
+        appUseWebGPUCheckbox.checked = useWebGPU;
+        
+        appStatus.textContent = 'Requesting camera access...';
+        appStream = await navigator.mediaDevices.getUserMedia({ 
+          video: { frameRate: { ideal: 30 }, width: 1280, height: 720 } 
+        });
+        
+        appVideo.srcObject = appStream;
+        await new Promise(r => appVideo.onloadedmetadata = r);
+        
+        // Wait until dimensions are available
+        await new Promise(res => {
+          const chk = () => (appVideo.videoWidth > 0) ? res() : setTimeout(chk, 50);
+          chk();
+        });
+        
+        appVideo.style.display = 'block';
+        appCanvas.style.display = 'block';
+        
+        isRunning = true;
+        startButton.style.display = 'none';
+        stopButton.style.display = 'inline-block';
+        runtimeControls.style.display = 'block';
+        
+        // Now run the video processing
+        await run();
+        
+      } catch (error) {
+        console.error('Failed to start video processing:', error);
+        appStatus.textContent = 'Error: ' + error.message;
+        startButton.disabled = false;
+        startButton.textContent = 'Start Video Processing';
+        if (appStream) {
+          appStream.getTracks().forEach(t => t.stop());
+          appStream = null;
+        }
+      }
+    }
+
+    function stopVideoProcessing() {
+      if (!isRunning) return;
+      isRunning = false;
+      
+      // Stop any active streams
+      if (appVideo.srcObject) {
+        appVideo.srcObject.getTracks().forEach(t => t.stop());
+        appVideo.srcObject = null;
+      }
+      if (appStream) {
+        appStream.getTracks().forEach(t => t.stop());
+        appStream = null;
+      }
+      
+      // Clear any render intervals
+      if (window.renderInterval) {
+        clearInterval(window.renderInterval);
+        window.renderInterval = null;
+      }
+      
+      appBlurRenderer = null;
+      appSegmenter = null;
+      
+      startButton.disabled = false;
+      startButton.textContent = 'Start Video Processing';
+      startButton.style.display = 'inline-block';
+      stopButton.style.display = 'none';
+      runtimeControls.style.display = 'none';
+      appStatus.textContent = 'Stopped. You can start again.';
+    }
+
+    // Initialize compatibility info and set up event listeners
+    async function initializeApp() {
+      initializeCompatibilityInfo();
+      
+      startButton.addEventListener('click', startVideoProcessing);
+      stopButton.addEventListener('click', stopVideoProcessing);
+      
+      // Handle runtime renderer switching (only when running)
+      appUseWebGPUCheckbox.addEventListener('change', async () => {
+        if (!isRunning) return;
+        appStatus.innerText = 'Switching renderer...';
+        // Reset counters when switching renderers
+        appCount = 0;
+        appSegmentTimes.length = 0;
+      });
+    }
+
+    // Initialize the app
+    initializeApp();
+  </script>
+</body>
+
+</html>
