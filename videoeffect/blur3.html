@@ -22,6 +22,7 @@
 
 <body>
   <div id="status" style="font: 1em sans-serif">Select renderer and click Start to begin video processing</div>
+  <div id="fpsDisplay" style="font: 1em sans-serif; margin-top: 5px; color: #666;">FPS: --</div>
   
   <div style="margin-bottom: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9; width: 600px;">
     <h3 style="margin-top: 0;">Renderer Selection</h3>
@@ -84,13 +85,19 @@
       let count = 0;
       const segmentTimes = [];
       const status = document.getElementById('status');
+      const fpsDisplay = document.getElementById('fpsDisplay');
       const video = document.getElementById('webcam');
       const canvas = document.getElementById('output');
       const ctx = canvas.getContext('2d');
       const useWebGPUCheckbox = document.getElementById('useWebGPU');
-      const vbFps = 24;
+      const vbFps = 30;
       let blurRenderer = null;
       let segmenter = null;
+      
+      // FPS tracking variables
+      let frameCount = 0;
+      let lastFpsTime = performance.now();
+      let actualFps = 0;
       
       // Create a separate canvas for MediaPipe input
       const inputCanvas = document.createElement('canvas');
@@ -822,6 +829,10 @@
         // Reset counters when switching renderers
         count = 0;
         segmentTimes.length = 0;
+        // Reset FPS tracking
+        frameCount = 0;
+        lastFpsTime = performance.now();
+        fpsDisplay.textContent = `FPS: -- (Target: ${vbFps})`;
       });
 
       // Use the existing stream from app initialization
@@ -843,13 +854,21 @@
       async function render() {
         if (!isRunning) return;
         if (video.readyState < 2 || video.videoWidth === 0) {
-          // Not ready yet
-          if (isRunning) {
-            if (QueryString.fps !== '24') {
-              requestAnimationFrame(render);
-            }
-          }
+          // Not ready yet, will retry on next interval
           return;
+        }
+        
+        // FPS calculation
+        frameCount++;
+        const currentTime = performance.now();
+        const deltaTime = currentTime - lastFpsTime;
+        
+        // Update FPS display every second
+        if (deltaTime >= 1000) {
+          actualFps = (frameCount * 1000) / deltaTime;
+          fpsDisplay.textContent = `FPS: ${actualFps.toFixed(1)} (Target: ${vbFps})`;
+          frameCount = 0;
+          lastFpsTime = currentTime;
         }
         
         const start = performance.now();
@@ -911,21 +930,14 @@
           ctx.clearRect(0, 0, canvas.width, canvas.height);
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         }
-
-        if (QueryString.fps !== '24') {
-          if (isRunning) requestAnimationFrame(render);
-        }
       }
 
       let renderInterval = null;
       
-      if (QueryString.fps === '24') {
-        renderInterval = setInterval(() => {
-          if (isRunning) render();
-        }, 1000/vbFps);
-      } else {
-        render();
-      }
+      // Always use setInterval for consistent timing
+      renderInterval = setInterval(() => {
+        if (isRunning) render();
+      }, 1000/vbFps);
     }
 
     // Global variables for app state
@@ -943,6 +955,7 @@
     const runtimeControls = document.getElementById('runtimeControls');
     const webgpuRadio = document.getElementById('webgpuRadio');
     const appStatus = document.getElementById('status');
+    const appFpsDisplay = document.getElementById('fpsDisplay');
     const appVideo = document.getElementById('webcam');
     const appProcessedVideo = document.getElementById('processedVideo');
     const appCanvas = document.getElementById('output');
@@ -1037,6 +1050,7 @@
       stopButton.style.display = 'none';
       runtimeControls.style.display = 'none';
       appStatus.textContent = 'Stopped. You can start again.';
+      appFpsDisplay.textContent = 'FPS: --';
     }
 
     // Initialize compatibility info and set up event listeners
