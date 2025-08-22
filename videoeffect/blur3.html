@@ -39,6 +39,15 @@
       Stop
     </button>
   </div>
+
+  <div style="margin-bottom: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9; width: 600px;">
+    <h3 style="margin-top: 0;">Display Settings</h3>
+    <label style="font: 1em sans-serif; margin-right: 20px;">Display Size:</label>
+    <select id="displaySize" style="padding: 5px; font-size: 14px; border-radius: 3px; border: 1px solid #ccc;">
+      <option value="small">320×180 (Preview)</option>
+      <option value="original" selected>1280×720 (Original)</option>
+    </select>
+  </div>
   
   <div style="margin-bottom: 10px; display: none;" id="runtimeControls">
     <label style="font: 1em sans-serif;">
@@ -745,75 +754,6 @@
         }
       }
 
-      function applySimpleBlur(imageData, maskImageData) {
-        // Validate input data
-        if (!imageData || !imageData.data || imageData.width <= 0 || imageData.height <= 0) {
-          console.error('Invalid imageData:', imageData);
-          return imageData;
-        }
-        
-        if (!maskImageData || !maskImageData.data || maskImageData.width <= 0 || maskImageData.height <= 0) {
-          console.error('Invalid maskImageData:', maskImageData);
-          return imageData;
-        }
-        
-        // Simple blur implementation for fallback
-        const data = imageData.data;
-        const maskData = maskImageData.data;
-        const width = imageData.width;
-        const height = imageData.height;
-        
-        // Create a copy for output with validation
-        const outputData = new ImageData(width, height);
-        const output = outputData.data;
-        
-        // Scale factors for mask vs image dimensions
-        const maskWidth = maskImageData.width;
-        const maskHeight = maskImageData.height;
-        const scaleX = maskWidth / width;
-        const scaleY = maskHeight / height;
-        
-        for (let y = 0; y < height; y++) {
-          for (let x = 0; x < width; x++) {
-            const idx = (y * width + x) * 4;
-            
-            // Get corresponding mask pixel
-            const maskX = Math.floor(x * scaleX);
-            const maskY = Math.floor(y * scaleY);
-            const maskIdx = (maskY * maskWidth + maskX) * 4;
-            const maskValue = maskData[maskIdx] / 255; // Normalize mask value
-            
-            if (maskValue < 0.5) { // Background pixel, apply blur
-              // Stronger 5x5 blur for more visible effect
-              let r = 0, g = 0, b = 0, count = 0;
-              for (let dy = -2; dy <= 2; dy++) {
-                for (let dx = -2; dx <= 2; dx++) {
-                  const nx = x + dx;
-                  const ny = y + dy;
-                  if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-                    const nidx = (ny * width + nx) * 4;
-                    r += data[nidx];
-                    g += data[nidx + 1];
-                    b += data[nidx + 2];
-                    count++;
-                  }
-                }
-              }
-              output[idx] = r / count;
-              output[idx + 1] = g / count;
-              output[idx + 2] = b / count;
-              output[idx + 3] = data[idx + 3];
-            } else { // Foreground pixel, keep original
-              output[idx] = data[idx];
-              output[idx + 1] = data[idx + 1];
-              output[idx + 2] = data[idx + 2];
-              output[idx + 3] = data[idx + 3];
-            }
-          }
-        }
-        return outputData;
-      }
-
       // Initialize both segmenter and renderer
       await initializeSegmenter();
       await initializeBlurRenderer();
@@ -954,6 +894,7 @@
     const stopButton = document.getElementById('stopButton');
     const runtimeControls = document.getElementById('runtimeControls');
     const webgpuRadio = document.getElementById('webgpuRadio');
+    const displaySizeSelect = document.getElementById('displaySize');
     const appStatus = document.getElementById('status');
     const appFpsDisplay = document.getElementById('fpsDisplay');
     const appVideo = document.getElementById('webcam');
@@ -963,6 +904,28 @@
     
     // Check browser compatibility
     const hasWebGPU = 'gpu' in navigator;
+    
+    // Function to update display size of video elements
+    function updateDisplaySize() {
+      const size = displaySizeSelect.value;
+      let width, height;
+      
+      if (size === 'small') {
+        width = 320;
+        height = 180;
+      } else {
+        width = 1280;
+        height = 720;
+      }
+      
+      // Update video elements
+      appVideo.style.width = width + 'px';
+      appVideo.style.height = height + 'px';
+      appProcessedVideo.style.width = width + 'px';
+      appProcessedVideo.style.height = height + 'px';
+      appCanvas.style.width = width + 'px';
+      appCanvas.style.height = height + 'px';
+    }
     
     // Initialize compatibility info
     function initializeCompatibilityInfo() {
@@ -1057,8 +1020,14 @@
     async function initializeApp() {
       initializeCompatibilityInfo();
       
+      // Set initial display size
+      updateDisplaySize();
+      
       startButton.addEventListener('click', startVideoProcessing);
       stopButton.addEventListener('click', stopVideoProcessing);
+      
+      // Handle display size changes
+      displaySizeSelect.addEventListener('change', updateDisplaySize);
       
       // Handle runtime renderer switching (only when running)
       appUseWebGPUCheckbox.addEventListener('change', async () => {
