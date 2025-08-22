@@ -46,6 +46,7 @@
   </div>
   <div>
     <video id="webcam" autoplay playsinline muted style="display: none;"></video>
+    <video id="processedVideo" autoplay playsinline muted style="display: none;"></video>
     <canvas id="output" style="display: none;"></canvas>
   </div>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
@@ -127,12 +128,26 @@
             blurRenderer = await createWebGPUBlurRenderer(canvas);
             // Set up MediaStreamTrackProcessor for WebGPU if stream is available
             if (appStream && blurRenderer.setupTrackProcessor) {
-              blurRenderer.setupTrackProcessor(appStream);
+              const success = blurRenderer.setupTrackProcessor(appStream);
+              if (success && blurRenderer.getOutputStream) {
+                // Use the processed video stream for display
+                const outputStream = blurRenderer.getOutputStream();
+                if (outputStream && appProcessedVideo) {
+                  appProcessedVideo.srcObject = outputStream;
+                  appProcessedVideo.style.display = 'block';
+                  appCanvas.style.display = 'none';
+                }
+              }
             }
             status.innerText = 'Renderer: WebGPU';
             console.log('Using WebGPU for blur rendering');
           } else {
             blurRenderer = createWebGL2BlurRenderer(canvas);
+            // For WebGL2, use canvas display
+            appCanvas.style.display = 'block';
+            if (appProcessedVideo) {
+              appProcessedVideo.style.display = 'none';
+            }
             status.innerText = 'Renderer: WebGL2';
             console.log('Using WebGL2 for blur rendering');
           }
@@ -141,6 +156,10 @@
           // Fallback to WebGL2 if WebGPU fails
           if (useWebGPU) {
             blurRenderer = createWebGL2BlurRenderer(canvas);
+            appCanvas.style.display = 'block';
+            if (appProcessedVideo) {
+              appProcessedVideo.style.display = 'none';
+            }
             status.innerText = 'Renderer: WebGL2 (WebGPU fallback)';
             useWebGPUCheckbox.checked = false;
           }
@@ -353,6 +372,8 @@
         // Set up MediaStreamTrackProcessor for getting VideoFrames
         let trackProcessor = null;
         let reader = null;
+        let trackGenerator = null;
+        let outputStream = null;
         
         const setupTrackProcessor = (stream) => {
           if (trackProcessor) {
@@ -373,10 +394,14 @@
             trackProcessor = new MediaStreamTrackProcessor({ track: videoTrack });
             reader = trackProcessor.readable.getReader();
             
-            console.log('MediaStreamTrackProcessor initialized for WebGPU');
+            // Create MediaStreamTrackGenerator for output
+            trackGenerator = new MediaStreamTrackGenerator({ kind: 'video' });
+            outputStream = new MediaStream([trackGenerator]);
+            
+            console.log('MediaStreamTrackProcessor and Generator initialized for WebGPU');
             return true;
           } catch (error) {
-            console.warn('MediaStreamTrackProcessor not supported, falling back to canvas approach:', error);
+            console.warn('MediaStreamTrackProcessor/Generator not supported, falling back to canvas approach:', error);
             return false;
           }
         };
@@ -395,9 +420,10 @@
             }
             
             // WebGPU rendering implementation
-            await renderWithWebGPU(device, context, computePipeline, videoElement, maskImageData, webgpuCanvas, trackProcessor, reader);
+            await renderWithWebGPU(device, context, computePipeline, videoElement, maskImageData, webgpuCanvas, trackProcessor, reader, trackGenerator);
           },
-          setupTrackProcessor: setupTrackProcessor
+          setupTrackProcessor: setupTrackProcessor,
+          getOutputStream: () => outputStream
         };
       }
 
@@ -472,10 +498,8 @@
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       }
 
-      async function renderWithWebGPU(device, context, computePipeline, videoElement, maskImageData, webgpuCanvas, trackProcessor, reader) {
+      async function renderWithWebGPU(device, context, computePipeline, videoElement, maskImageData, webgpuCanvas, trackProcessor, reader, trackGenerator) {
         try {
-          console.log('Attempting WebGPU rendering...');
-          
           // Update canvas size if needed
           if (webgpuCanvas.width !== videoElement.videoWidth || webgpuCanvas.height !== videoElement.videoHeight) {
             webgpuCanvas.width = videoElement.videoWidth;
@@ -493,13 +517,13 @@
           let videoTexture = device.createTexture({
             size: [width, height, 1],
             format: 'rgba8unorm',
-            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
           });
           
           const maskTexture = device.createTexture({
             size: [maskImageData.width, maskImageData.height, 1],
             format: 'rgba8unorm',
-            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
           });
           
           const outputTexture = device.createTexture({
@@ -512,40 +536,38 @@
           let videoUploaded = false;
           let actualVideoWidth = width;
           let actualVideoHeight = height;
+          let currentVideoFrame = null;
           
           if (trackProcessor && reader) {
             // Try to read a VideoFrame from MediaStreamTrackProcessor (non-blocking check)
             try {
               const readResult = await reader.read();
               if (!readResult.done && readResult.value) {
-                const videoFrame = readResult.value;
+                currentVideoFrame = readResult.value;
                 
                 // Update dimensions based on VideoFrame
-                actualVideoWidth = videoFrame.displayWidth;
-                actualVideoHeight = videoFrame.displayHeight;
+                actualVideoWidth = currentVideoFrame.displayWidth;
+                actualVideoHeight = currentVideoFrame.displayHeight;
                 
                 // Recreate video texture with correct dimensions
                 videoTexture.destroy();
                 videoTexture = device.createTexture({
                   size: [actualVideoWidth, actualVideoHeight, 1],
                   format: 'rgba8unorm',
-                  usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+                  usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
                 });
                 
                 try {
                   // Use copyExternalImageToTexture for efficient GPU upload
                   device.queue.copyExternalImageToTexture(
-                    { source: videoFrame },
+                    { source: currentVideoFrame },
                     { texture: videoTexture },
                     [actualVideoWidth, actualVideoHeight, 1]
                   );
-                  videoFrame.close(); // Important: release the VideoFrame
-                  console.log('Video data uploaded via copyExternalImageToTexture');
                   videoUploaded = true;
 
                 } catch (error) {
                   console.warn('copyExternalImageToTexture failed, falling back to canvas approach:', error);
-                  videoFrame.close(); // Still need to close the frame
                 }
               }
             } catch (error) {
@@ -677,10 +699,34 @@
           
           device.queue.submit([commandEncoder.finish()]);
           
-          // Copy WebGPU canvas to main canvas
-          const mainCtx = canvas.getContext('2d');
-          mainCtx.clearRect(0, 0, canvas.width, canvas.height);
-          mainCtx.drawImage(webgpuCanvas, 0, 0);
+          // Instead of copying to main canvas, create a VideoFrame and send to MediaStreamTrackGenerator
+          if (trackGenerator && trackGenerator.writable && currentVideoFrame) {
+            try {
+              // Create a new VideoFrame from the processed WebGPU canvas
+              const processedVideoFrame = new VideoFrame(webgpuCanvas, {
+                timestamp: currentVideoFrame.timestamp,
+                duration: currentVideoFrame.duration
+              });
+              
+              // Write the processed frame to the MediaStreamTrackGenerator
+              const writer = trackGenerator.writable.getWriter();
+              await writer.write(processedVideoFrame);
+              writer.releaseLock();
+              
+              // Close the processed frame to free memory
+              processedVideoFrame.close();
+            } catch (error) {
+              console.warn('Failed to write VideoFrame to MediaStreamTrackGenerator:', error);
+            }
+          } else {
+            // Warn when MediaStreamTrackGenerator is not available
+            console.warn('MediaStreamTrackGenerator not available, processed video will not be displayed');
+          }
+          
+          // Close the original VideoFrame to free memory
+          if (currentVideoFrame) {
+            currentVideoFrame.close();
+          }
           
           // Clean up textures
           videoTexture.destroy();
@@ -693,8 +739,6 @@
       }
 
       function applySimpleBlur(imageData, maskImageData) {
-        console.log('Applying simple blur with mask data');
-        
         // Validate input data
         if (!imageData || !imageData.data || imageData.width <= 0 || imageData.height <= 0) {
           console.error('Invalid imageData:', imageData);
@@ -821,15 +865,12 @@
         for (let segment of segmentation) {
           const mask = segment.mask;
           try {
-            console.log('Converting CPU mask to ImageData...');
             maskImageData = await mask.toImageData();
             
             // Validate mask data
             if (!maskImageData || maskImageData.width <= 0 || maskImageData.height <= 0) {
               console.error('Invalid mask data:', maskImageData);
               maskImageData = null;
-            } else {
-              console.log('Valid mask data:', maskImageData.width, 'x', maskImageData.height);
             }
             
             break; // Use first segment
@@ -843,7 +884,6 @@
         const minutes = 1;
         count++;
         if (((performance.now() - startRun) <= 1000 * 60 * minutes)) { // only record for 1 minute
-          console.log(`Segmentation time ${count}: ${segmentTime.toFixed(2)} ms`);
           if (count > 3) {
             // Skip first 3 inferences, treat as warmup
             segmentTimes.push(segmentTime);
@@ -904,6 +944,7 @@
     const webgpuRadio = document.getElementById('webgpuRadio');
     const appStatus = document.getElementById('status');
     const appVideo = document.getElementById('webcam');
+    const appProcessedVideo = document.getElementById('processedVideo');
     const appCanvas = document.getElementById('output');
     const appUseWebGPUCheckbox = document.getElementById('useWebGPU');
     
@@ -945,6 +986,7 @@
         
         appVideo.style.display = 'block';
         appCanvas.style.display = 'block';
+        appProcessedVideo.style.display = 'none';
         
         isRunning = true;
         startButton.style.display = 'none';
