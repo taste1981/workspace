@@ -177,10 +177,11 @@
 
       // WebGL2 blur renderer
       function createWebGL2BlurRenderer(canvas) {
-        // Create a separate canvas for WebGL2 to avoid context conflicts
+        // Create a separate canvas for WebGL2 processing at full resolution
         const webglCanvas = document.createElement('canvas');
-        webglCanvas.width = canvas.width;
-        webglCanvas.height = canvas.height;
+        // Always use full video resolution for processing, regardless of display size
+        webglCanvas.width = 1280;
+        webglCanvas.height = 720;
         
         const gl = webglCanvas.getContext('webgl2');
         if (!gl) throw new Error('WebGL2 not supported');
@@ -274,7 +275,8 @@
       // WebGPU blur renderer
       async function createWebGPUBlurRenderer() {
         const preferredFormat = navigator.gpu.getPreferredCanvasFormat();
-        const webgpuCanvas = new OffscreenCanvas(1280, 720); // Will be resized dynamically
+        // Always use full resolution for processing, regardless of display size
+        const webgpuCanvas = new OffscreenCanvas(1280, 720);
         
         const adapter = await navigator.gpu.requestAdapter();
         if (!adapter) {
@@ -416,11 +418,15 @@
         
         return {
           render: async (videoElement, maskImageData) => {
-            // Update canvas size if needed
-            if (webgpuCanvas.width !== videoElement.videoWidth || webgpuCanvas.height !== videoElement.videoHeight) {
-              webgpuCanvas.width = videoElement.videoWidth;
-              webgpuCanvas.height = videoElement.videoHeight;
-              // Reconfigure context with new size
+            // Always process at full video resolution, ignore display size
+            const processingWidth = videoElement.videoWidth || 1280;
+            const processingHeight = videoElement.videoHeight || 720;
+            
+            // Update canvas size only if video resolution actually changed
+            if (webgpuCanvas.width !== processingWidth || webgpuCanvas.height !== processingHeight) {
+              webgpuCanvas.width = processingWidth;
+              webgpuCanvas.height = processingHeight;
+              // Reconfigure context with actual video size
               context.configure({
                 device: device,
                 format: preferredFormat,
@@ -459,10 +465,14 @@
                 positionLocation, texCoordLocation, imageLocation, 
                 maskLocation, resolutionLocation, blurAmountLocation, webglCanvas } = resources;
         
-        // Update canvas size if needed
-        if (webglCanvas.width !== videoElement.videoWidth || webglCanvas.height !== videoElement.videoHeight) {
-          webglCanvas.width = videoElement.videoWidth;
-          webglCanvas.height = videoElement.videoHeight;
+        // Always process at full video resolution, ignore display size
+        const processingWidth = videoElement.videoWidth || 1280;
+        const processingHeight = videoElement.videoHeight || 720;
+        
+        // Update canvas size only if video resolution actually changed
+        if (webglCanvas.width !== processingWidth || webglCanvas.height !== processingHeight) {
+          webglCanvas.width = processingWidth;
+          webglCanvas.height = processingHeight;
         }
         
         gl.viewport(0, 0, webglCanvas.width, webglCanvas.height);
@@ -509,10 +519,14 @@
 
       async function renderWithWebGPU(device, context, preferredFormat, computePipeline, videoElement, maskImageData, webgpuCanvas, trackProcessor, reader, trackGenerator) {
         try {
-          // Update canvas size if needed
-          if (webgpuCanvas.width !== videoElement.videoWidth || webgpuCanvas.height !== videoElement.videoHeight) {
-            webgpuCanvas.width = videoElement.videoWidth;
-            webgpuCanvas.height = videoElement.videoHeight;
+          // Always process at full video resolution, ignore display size
+          const processingWidth = videoElement.videoWidth || 1280;
+          const processingHeight = videoElement.videoHeight || 720;
+          
+          // Update canvas size only if video resolution actually changed
+          if (webgpuCanvas.width !== processingWidth || webgpuCanvas.height !== processingHeight) {
+            webgpuCanvas.width = processingWidth;
+            webgpuCanvas.height = processingHeight;
             context.configure({
               device: device,
               format: preferredFormat,
@@ -781,7 +795,7 @@
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
       
-      // Set up input canvas for MediaPipe (same dimensions as video)
+      // Set up input canvas for MediaPipe (always use full video resolution)
       inputCanvas.width = video.videoWidth;
       inputCanvas.height = video.videoHeight;
 
@@ -899,7 +913,7 @@
     // Check browser compatibility
     const hasWebGPU = 'gpu' in navigator;
     
-    // Function to update display size of video elements
+    // Function to update display size of video elements (does NOT affect processing resolution)
     function updateDisplaySize() {
       const size = displaySizeSelect.value;
       let width, height;
@@ -912,7 +926,7 @@
         height = 720;
       }
       
-      // Update video elements
+      // Update video elements display size only - processing remains at full resolution
       appVideo.style.width = width + 'px';
       appVideo.style.height = height + 'px';
       appProcessedVideo.style.width = width + 'px';
