@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebGPU Video Processor</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      background-color: #f5f5f5;
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+    }
+
+    .control-panel {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .video-container {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+
+    .video-section {
+      flex: 1;
+      min-width: 300px;
+    }
+
+    .video-section h3 {
+      margin-top: 0;
+      color: #333;
+    }
+
+    video {
+      width: 100%;
+      max-width: 640px;
+      border: 2px solid #ddd;
+      border-radius: 4px;
+    }
+
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-right: 10px;
+      margin-bottom: 10px;
+    }
+
+    .start-btn {
+      background-color: #4CAF50;
+      color: white;
+    }
+
+    .stop-btn {
+      background-color: #f44336;
+      color: white;
+    }
+
+    .start-btn:disabled, .stop-btn:disabled {
+      background-color: #ccc;
+      cursor: not-allowed;
+    }
+
+    .checkbox-container {
+      margin: 10px 0;
+    }
+
+    .checkbox-container input[type="checkbox"] {
+      margin-right: 8px;
+    }
+
+    .status {
+      padding: 10px;
+      border-radius: 4px;
+      margin: 10px 0;
+      font-weight: bold;
+    }
+
+    .status.info {
+      background-color: #d1ecf1;
+      color: #0c5460;
+    }
+
+    .status.error {
+      background-color: #f8d7da;
+      color: #721c24;
+    }
+
+    .status.success {
+      background-color: #d4edda;
+      color: #155724;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .stat-item {
+      background: #f8f9fa;
+      padding: 10px;
+      border-radius: 4px;
+      border-left: 4px solid #007bff;
+    }
+
+    .stat-label {
+      font-size: 12px;
+      color: #666;
+      text-transform: uppercase;
+    }
+
+    .stat-value {
+      font-size: 18px;
+      font-weight: bold;
+      color: #333;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>WebGPU Video Processor</h1>
+    <p>Demonstrates MediaStreamTrackProcessor → WebGPU → MediaStreamTrackGenerator pipeline with optional GPU readback.</p>
+
+    <div class="control-panel">
+      <h2>Controls</h2>
+      
+      <button id="startBtn" class="start-btn">Start Camera</button>
+      <button id="stopBtn" class="stop-btn" disabled>Stop</button>
+      
+      <div class="checkbox-container">
+        <label>
+          <input type="checkbox" id="enableReadback" />
+          Enable GPU Readback (scales down to 255×144 and reads back texture data - performance impact)
+        </label>
+      </div>
+      
+      <div class="checkbox-container">
+        <label>
+          <input type="checkbox" id="showInputVideo" />
+          Show Original Input Video (camera feed)
+        </label>
+      </div>
+      
+      <div class="checkbox-container">
+        <label>
+          <input type="checkbox" id="showReadbackVideo" />
+          Show Readback Video (255×144 scaled output - only works when readback is enabled)
+        </label>
+      </div>
+
+      <div id="status" class="status info">Click "Start Camera" to begin</div>
+
+      <div class="stats">
+        <div class="stat-item">
+          <div class="stat-label">Processing FPS</div>
+          <div class="stat-value" id="processingFps">--</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Readback FPS</div>
+          <div class="stat-value" id="readbackFps">--</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Input Resolution</div>
+          <div class="stat-value" id="inputResolution">--</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Output Resolution</div>
+          <div class="stat-value" id="outputResolution">--</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="video-container">
+      <div class="video-section" id="inputVideoSection" style="display: none;">
+        <h3>Input Video (Camera)</h3>
+        <video id="inputVideo" autoplay playsinline muted></video>
+      </div>
+      
+      <div class="video-section">
+        <h3>Output Video (WebGPU Processed)</h3>
+        <video id="outputVideo" autoplay playsinline muted></video>
+      </div>
+      
+      <div class="video-section" id="readbackVideoSection" style="display: none;">
+        <h3>Readback Video (255×144)</h3>
+        <canvas id="readbackCanvas" width="255" height="144" style="border: 2px solid #ddd; border-radius: 4px; max-width: 320px;"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    class WebGPUVideoProcessor {
+      constructor() {
+        this.device = null;
+        this.trackProcessor = null;
+        this.trackGenerator = null;
+        this.reader = null;
+        this.writer = null;
+        this.inputStream = null;
+        this.outputStream = null;
+        this.isProcessing = false;
+        this.enableReadback = false;
+        
+        // Performance tracking
+        this.frameCount = 0;
+        this.readbackCount = 0;
+        this.lastFpsTime = performance.now();
+        this.lastReadbackTime = performance.now();
+        
+        // GPU resources
+        this.inputTexture = null;
+        this.scaledTexture = null;
+        this.outputBuffer = null;
+        this.stagingBuffer = null;
+        this.scalingPipeline = null;
+        
+        // DOM elements
+        this.startBtn = document.getElementById('startBtn');
+        this.stopBtn = document.getElementById('stopBtn');
+        this.enableReadbackCheckbox = document.getElementById('enableReadback');
+        this.showInputVideoCheckbox = document.getElementById('showInputVideo');
+        this.showReadbackVideoCheckbox = document.getElementById('showReadbackVideo');
+        this.statusDiv = document.getElementById('status');
+        this.inputVideo = document.getElementById('inputVideo');
+        this.outputVideo = document.getElementById('outputVideo');
+        this.inputVideoSection = document.getElementById('inputVideoSection');
+        this.readbackVideoSection = document.getElementById('readbackVideoSection');
+        this.readbackCanvas = document.getElementById('readbackCanvas');
+        this.processingFpsSpan = document.getElementById('processingFps');
+        this.readbackFpsSpan = document.getElementById('readbackFps');
+        this.inputResolutionSpan = document.getElementById('inputResolution');
+        this.outputResolutionSpan = document.getElementById('outputResolution');
+        
+        this.bindEvents();
+      }
+      
+      bindEvents() {
+        this.startBtn.addEventListener('click', () => this.start());
+        this.stopBtn.addEventListener('click', () => this.stop());
+        this.enableReadbackCheckbox.addEventListener('change', (e) => {
+          this.enableReadback = e.target.checked;
+          // Hide readback video if readback is disabled
+          if (!this.enableReadback) {
+            this.showReadbackVideoCheckbox.checked = false;
+            this.readbackVideoSection.style.display = 'none';
+          }
+        });
+        this.showInputVideoCheckbox.addEventListener('change', (e) => {
+          this.inputVideoSection.style.display = e.target.checked ? 'block' : 'none';
+        });
+        this.showReadbackVideoCheckbox.addEventListener('change', (e) => {
+          // Only show readback video if readback is enabled
+          if (e.target.checked && this.enableReadback) {
+            this.readbackVideoSection.style.display = 'block';
+          } else {
+            this.readbackVideoSection.style.display = 'none';
+            if (!this.enableReadback) {
+              this.showReadbackVideoCheckbox.checked = false;
+              // Show warning if user tries to enable readback video without readback enabled
+              if (e.target.checked) {
+                alert('Please enable GPU Readback first to show readback video.');
+              }
+            }
+          }
+        });
+      }
+      
+      updateStatus(message, type = 'info') {
+        this.statusDiv.textContent = message;
+        this.statusDiv.className = `status ${type}`;
+      }
+      
+      updateStats() {
+        const now = performance.now();
+        const deltaTime = now - this.lastFpsTime;
+        
+        if (deltaTime >= 1000) {
+          const processingFps = (this.frameCount * 1000 / deltaTime).toFixed(1);
+          this.processingFpsSpan.textContent = processingFps;
+          this.frameCount = 0;
+          this.lastFpsTime = now;
+        }
+        
+        const readbackDelta = now - this.lastReadbackTime;
+        if (readbackDelta >= 1000) {
+          const readbackFps = (this.readbackCount * 1000 / readbackDelta).toFixed(1);
+          this.readbackFpsSpan.textContent = this.enableReadback ? readbackFps : '--';
+          this.readbackCount = 0;
+          this.lastReadbackTime = now;
+        }
+      }
+      
+      async initializeWebGPU() {
+        try {
+          if (!navigator.gpu) {
+            throw new Error('WebGPU not supported in this browser');
+          }
+          
+          const adapter = await navigator.gpu.requestAdapter();
+          if (!adapter) {
+            throw new Error('WebGPU adapter not available');
+          }
+          
+          this.device = await adapter.requestDevice();
+          
+          // Create scaling pipeline for readback
+          this.createScalingPipeline();
+          
+          return true;
+        } catch (error) {
+          this.updateStatus(`WebGPU initialization failed: ${error.message}`, 'error');
+          return false;
+        }
+      }
+      
+      async initializeCamera() {
+        try {
+          this.inputStream = await navigator.mediaDevices.getUserMedia({
+            video: { 
+              width: { exact: 1280 }, 
+              height: { exact: 720 }, 
+              frameRate: { exact: 30 }
+            }
+          });
+          
+          this.inputVideo.srcObject = this.inputStream;
+          await new Promise(resolve => this.inputVideo.onloadedmetadata = resolve);
+          
+          // Update resolution display
+          this.inputResolutionSpan.textContent = `${this.inputVideo.videoWidth}×${this.inputVideo.videoHeight}`;
+          this.outputResolutionSpan.textContent = `${this.inputVideo.videoWidth}×${this.inputVideo.videoHeight}`;
+          
+          return true;
+        } catch (error) {
+          this.updateStatus(`Camera access failed: ${error.message}`, 'error');
+          return false;
+        }
+      }
+      
+      createScalingPipeline() {
+        // Create a render pipeline for scaling down textures
+        const vertexShader = this.device.createShaderModule({
+          code: `
+            struct VertexOutput {
+              @builtin(position) position: vec4<f32>,
+              @location(0) uv: vec2<f32>,
+            }
+            
+            @vertex
+            fn main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
+              var pos = array<vec2<f32>, 6>(
+                vec2<f32>(-1.0, -1.0),
+                vec2<f32>( 1.0, -1.0),
+                vec2<f32>(-1.0,  1.0),
+                vec2<f32>( 1.0, -1.0),
+                vec2<f32>( 1.0,  1.0),
+                vec2<f32>(-1.0,  1.0)
+              );
+              var uv = array<vec2<f32>, 6>(
+                vec2<f32>(0.0, 1.0),
+                vec2<f32>(1.0, 1.0),
+                vec2<f32>(0.0, 0.0),
+                vec2<f32>(1.0, 1.0),
+                vec2<f32>(1.0, 0.0),
+                vec2<f32>(0.0, 0.0)
+              );
+              
+              var output: VertexOutput;
+              output.position = vec4<f32>(pos[vertexIndex], 0.0, 1.0);
+              output.uv = uv[vertexIndex];
+              return output;
+            }
+          `
+        });
+        
+        const fragmentShader = this.device.createShaderModule({
+          code: `
+            @group(0) @binding(0) var inputTexture: texture_2d<f32>;
+            @group(0) @binding(1) var textureSampler: sampler;
+            
+            @fragment
+            fn main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
+              return textureSample(inputTexture, textureSampler, uv);
+            }
+          `
+        });
+        
+        this.scalingPipeline = this.device.createRenderPipeline({
+          layout: 'auto',
+          vertex: {
+            module: vertexShader,
+            entryPoint: 'main',
+          },
+          fragment: {
+            module: fragmentShader,
+            entryPoint: 'main',
+            targets: [{
+              format: 'rgba8unorm',
+            }],
+          },
+          primitive: {
+            topology: 'triangle-list',
+          },
+        });
+      }
+      
+      initializeMediaStreamProcessing() {
+        try {
+          const videoTrack = this.inputStream.getVideoTracks()[0];
+          if (!videoTrack) {
+            throw new Error('No video track found');
+          }
+          
+          // Create MediaStreamTrackProcessor for input
+          this.trackProcessor = new MediaStreamTrackProcessor({ track: videoTrack });
+          this.reader = this.trackProcessor.readable.getReader();
+          
+          // Create MediaStreamTrackGenerator for output
+          this.trackGenerator = new MediaStreamTrackGenerator({ kind: 'video' });
+          this.writer = this.trackGenerator.writable.getWriter();
+          this.outputStream = new MediaStream([this.trackGenerator]);
+          
+          // Set output video source
+          this.outputVideo.srcObject = this.outputStream;
+          
+          return true;
+        } catch (error) {
+          this.updateStatus(`MediaStream processing setup failed: ${error.message}`, 'error');
+          return false;
+        }
+      }
+      
+      createGPUBuffers(width, height) {
+        // Clean up existing buffers and textures
+        if (this.outputBuffer) this.outputBuffer.destroy();
+        if (this.stagingBuffer) this.stagingBuffer.destroy();
+        if (this.scaledTexture) this.scaledTexture.destroy();
+        
+        // Create scaled texture (255x144)
+        const scaledWidth = 255;
+        const scaledHeight = 144;
+        
+        this.scaledTexture = this.device.createTexture({
+          size: [scaledWidth, scaledHeight, 1],
+          format: 'rgba8unorm',
+          usage: GPUTextureUsage.RENDER_ATTACHMENT | 
+                 GPUTextureUsage.COPY_SRC |
+                 GPUTextureUsage.TEXTURE_BINDING,
+        });
+        
+        const bytesPerPixel = 4; // RGBA
+        const bytesPerRow = scaledWidth * bytesPerPixel;
+        const bytesPerRowAligned = Math.ceil(bytesPerRow / 256) * 256; // Align to 256 bytes
+        const bufferSize = bytesPerRowAligned * scaledHeight;
+        
+        // Buffer for reading back texture data (with proper alignment)
+        this.outputBuffer = this.device.createBuffer({
+          size: bufferSize,
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+        });
+        
+        // Staging buffer for efficient readback
+        this.stagingBuffer = this.device.createBuffer({
+          size: bufferSize,
+          usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+        });
+      }
+      
+      async processVideoFrame() {
+        if (!this.isProcessing) return;
+        
+        try {
+          // Read VideoFrame from MediaStreamTrackProcessor
+          const readResult = await this.reader.read();
+          if (readResult.done) {
+            // Stream ended, stop processing
+            return;
+          }
+          
+          if (!readResult.value) {
+            // No frame available, continue processing but with a small delay
+            setTimeout(() => this.processVideoFrame(), 16); // ~60fps check rate
+            return;
+          }
+          
+          const videoFrame = readResult.value;
+          const width = videoFrame.displayWidth;
+          const height = videoFrame.displayHeight;
+          
+          // Create or recreate input texture if size changed
+          if (!this.inputTexture || 
+              this.inputTexture.width !== width || 
+              this.inputTexture.height !== height) {
+            
+            if (this.inputTexture) this.inputTexture.destroy();
+            
+            this.inputTexture = this.device.createTexture({
+              size: [width, height, 1],
+              format: 'rgba8unorm',
+              usage: GPUTextureUsage.TEXTURE_BINDING | 
+                     GPUTextureUsage.COPY_DST | 
+                     GPUTextureUsage.COPY_SRC |
+                     GPUTextureUsage.RENDER_ATTACHMENT,
+            });
+          }
+          
+          // Upload VideoFrame to GPU texture using copyExternalImageToTexture
+          this.device.queue.copyExternalImageToTexture(
+            { source: videoFrame },
+            { texture: this.inputTexture },
+            [width, height, 1]
+          );
+          
+          // Optional: Perform readback
+          if (this.enableReadback) {
+            // Always recreate buffers for readback to ensure they're fresh
+            this.createGPUBuffers(width, height);
+            await this.performReadback(width, height);
+          }
+          
+          // Create output VideoFrame from the same GPU texture
+          // In a real application, you would process the texture here
+          const outputVideoFrame = new VideoFrame(videoFrame, {
+            timestamp: videoFrame.timestamp,
+            duration: videoFrame.duration
+          });
+          
+          // Write processed frame to MediaStreamTrackGenerator
+          await this.writer.write(outputVideoFrame);
+          
+          // Clean up
+          outputVideoFrame.close();
+          videoFrame.close();
+          
+          // Update statistics
+          this.frameCount++;
+          this.updateStats();
+          
+          // Continue processing immediately to handle the next frame
+          // This will naturally run at the video source frame rate (30fps)
+          this.processVideoFrame();
+          
+        } catch (error) {
+          console.error('Error processing video frame:', error);
+          if (this.isProcessing) {
+            // Continue processing even if there's an error, but with a delay
+            setTimeout(() => this.processVideoFrame(), 100);
+          }
+        }
+      }
+      
+      async performReadback(width, height) {
+        try {
+          const commandEncoder = this.device.createCommandEncoder();
+          
+          // First, scale down the input texture to 255x144 using render pipeline
+          const scaledWidth = 255;
+          const scaledHeight = 144;
+
+          // Create sampler for texture sampling
+          const sampler = this.device.createSampler({
+            magFilter: 'linear',
+            minFilter: 'linear',
+          });
+          
+          // Create bind group for scaling operation
+          const bindGroup = this.device.createBindGroup({
+            layout: this.scalingPipeline.getBindGroupLayout(0),
+            entries: [
+              {
+                binding: 0,
+                resource: this.inputTexture.createView(),
+              },
+              {
+                binding: 1,
+                resource: sampler,
+              },
+            ],
+          });
+          
+          // Render to scaled texture
+          const renderPass = commandEncoder.beginRenderPass({
+            colorAttachments: [{
+              view: this.scaledTexture.createView(),
+              clearValue: { r: 0, g: 0, b: 0, a: 1 },
+              loadOp: 'clear',
+              storeOp: 'store',
+            }],
+          });
+          
+          renderPass.setPipeline(this.scalingPipeline);
+          renderPass.setBindGroup(0, bindGroup);
+          renderPass.draw(6); // Draw fullscreen quad
+          renderPass.end();
+          
+          // Copy scaled texture to buffer
+          const bytesPerRow = scaledWidth * 4; // RGBA
+          const bytesPerRowAligned = Math.ceil(bytesPerRow / 256) * 256; // Align to 256 bytes
+          
+          commandEncoder.copyTextureToBuffer(
+            {
+              texture: this.scaledTexture,
+              origin: [0, 0, 0],
+            },
+            {
+              buffer: this.outputBuffer,
+              bytesPerRow: bytesPerRowAligned,
+              rowsPerImage: scaledHeight,
+            },
+            [scaledWidth, scaledHeight, 1]
+          );
+          
+          this.device.queue.submit([commandEncoder.finish()]);
+          
+          // Wait for GPU operations to complete
+          await this.device.queue.onSubmittedWorkDone();
+          
+          // Map and read buffer data
+          await this.outputBuffer.mapAsync(GPUMapMode.READ);
+          const arrayBuffer = this.outputBuffer.getMappedRange();
+          const data = new Uint8Array(arrayBuffer);
+          
+          // Extract only the actual image data if there's row padding
+          let finalData = data;
+          if (bytesPerRowAligned !== bytesPerRow) {
+            const actualSize = scaledWidth * scaledHeight * 4;
+            finalData = new Uint8Array(actualSize);
+            for (let row = 0; row < scaledHeight; row++) {
+              const srcOffset = row * bytesPerRowAligned;
+              const dstOffset = row * bytesPerRow;
+              finalData.set(data.subarray(srcOffset, srcOffset + bytesPerRow), dstOffset);
+            }
+          }
+          
+          // Always update readback data when readback is enabled, display will show/hide based on checkbox
+          this.displayReadbackData(finalData, scaledWidth, scaledHeight);
+          
+          this.outputBuffer.unmap();
+          this.readbackCount++;
+          
+        } catch (error) {
+          console.warn('Readback failed:', error);
+        }
+      }
+      
+      displayReadbackData(data, width, height) {
+        try {
+          // Always update the canvas data, regardless of visibility
+          const ctx = this.readbackCanvas.getContext('2d');
+          const imageData = ctx.createImageData(width, height);
+          
+          // Copy the readback data to ImageData
+          for (let i = 0; i < data.length && i < imageData.data.length; i++) {
+            imageData.data[i] = data[i];
+          }
+          
+          // Draw the image data to the canvas (this will be shown when visible)
+          ctx.putImageData(imageData, 0, 0);
+          
+        } catch (error) {
+          console.warn('Failed to display readback data:', error);
+        }
+      }
+      
+      async start() {
+        this.updateStatus('Initializing...', 'info');
+        this.startBtn.disabled = true;
+        
+        // Initialize WebGPU
+        if (!await this.initializeWebGPU()) {
+          this.startBtn.disabled = false;
+          return;
+        }
+        
+        // Initialize camera
+        if (!await this.initializeCamera()) {
+          this.startBtn.disabled = false;
+          return;
+        }
+        
+        // Initialize MediaStream processing
+        if (!this.initializeMediaStreamProcessing()) {
+          this.startBtn.disabled = false;
+          return;
+        }
+        
+        // Start processing
+        this.isProcessing = true;
+        this.updateStatus('Processing video...', 'success');
+        this.stopBtn.disabled = false;
+        
+        // Start the processing loop
+        this.processVideoFrame();
+      }
+      
+      stop() {
+        this.isProcessing = false;
+        this.updateStatus('Stopping...', 'info');
+        
+        // Clean up MediaStream processing
+        if (this.reader) {
+          this.reader.cancel().catch(console.warn);
+          this.reader = null;
+        }
+        
+        if (this.writer) {
+          this.writer.close().catch(console.warn);
+          this.writer = null;
+        }
+        
+        if (this.trackProcessor) {
+          this.trackProcessor = null;
+        }
+        
+        if (this.trackGenerator) {
+          this.trackGenerator = null;
+        }
+        
+        // Stop camera
+        if (this.inputStream) {
+          this.inputStream.getTracks().forEach(track => track.stop());
+          this.inputStream = null;
+        }
+        
+        // Clear video sources
+        this.inputVideo.srcObject = null;
+        this.outputVideo.srcObject = null;
+        this.outputStream = null;
+        
+        // Clean up GPU resources
+        if (this.inputTexture) {
+          this.inputTexture.destroy();
+          this.inputTexture = null;
+        }
+        
+        if (this.scaledTexture) {
+          this.scaledTexture.destroy();
+          this.scaledTexture = null;
+        }
+        
+        if (this.outputBuffer) {
+          this.outputBuffer.destroy();
+          this.outputBuffer = null;
+        }
+        
+        if (this.stagingBuffer) {
+          this.stagingBuffer.destroy();
+          this.stagingBuffer = null;
+        }
+        
+        // Reset UI
+        this.startBtn.disabled = false;
+        this.stopBtn.disabled = true;
+        this.updateStatus('Stopped', 'info');
+        
+        // Reset stats
+        this.processingFpsSpan.textContent = '--';
+        this.readbackFpsSpan.textContent = '--';
+        this.inputResolutionSpan.textContent = '--';
+        this.outputResolutionSpan.textContent = '--';
+        this.frameCount = 0;
+        this.readbackCount = 0;
+      }
+    }
+    
+    // Initialize the application
+    const processor = new WebGPUVideoProcessor();
+    
+    // Check WebGPU support on page load
+    if (!navigator.gpu) {
+      document.getElementById('status').textContent = 'WebGPU is not supported in this browser';
+      document.getElementById('status').className = 'status error';
+      document.getElementById('startBtn').disabled = true;
+    }
+  </script>
+</body>
+
+</html>
