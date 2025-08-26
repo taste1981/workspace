@@ -150,7 +150,7 @@
 <body>
   <div class="container">
     <h1>VideoFrame Visible Rect Test</h1>
-    <p>Tests that VideoFrame with visibleRect parameter correctly crops video quadrants using WebGPU external textures.</p>
+    <p>Tests that VideoFrame with visibleRect parameter correctly crops video quadrants using WebGPU external textures. VideoFrames are obtained from MediaStreamTrackProcessor for real-time processing.</p>
 
     <div class="control-panel">
       <h2>Controls</h2>
@@ -174,7 +174,7 @@
         <h3>Original Video</h3>
         <video id="originalVideo" loop muted></video>
         <p id="videoDescription">Select a video to see description...</p>
-        <p><em>Note: Raw video data contains Yellow(TL), Red(TR), Blue(BL), Green(BR). HTML video element may display differently due to rotation metadata, but VideoFrame visibleRect operates on raw data coordinates.</em></p>
+        <p><em>Note: VideoFrames are obtained from MediaStreamTrackProcessor streaming from the video element. Raw video data contains Yellow(TL), Red(TR), Blue(BL), Green(BR). VideoFrame visibleRect operates on raw data coordinates.</em></p>
         
         <div id="videoFrameMetadata" style="margin-top: 15px; padding: 10px; background-color: #f8f9fa; border-radius: 4px; font-family: monospace; font-size: 12px; word-wrap: break-word; overflow-wrap: break-word;">
           <strong>VideoFrame Metadata:</strong>
@@ -222,6 +222,9 @@
         this.pipeline = null;
         this.isRunning = false;
         this.animationId = null;
+        this.mediaStreamTrackProcessor = null;
+        this.currentVideoFrame = null;
+        this.frameReader = null;
         
         // Expected colors for each quadrant (based on the test video)
         this.expectedColors = {
@@ -387,18 +390,79 @@
         return new Promise((resolve, reject) => {
           const selectedVideo = this.videoSelect.value;
           this.originalVideo.src = selectedVideo;
-          this.originalVideo.addEventListener('loadeddata', () => {
-            this.originalVideo.play();
-            resolve();
+          this.originalVideo.addEventListener('loadeddata', async () => {
+            try {
+              this.originalVideo.play();
+              
+              // Set up MediaStreamTrackProcessor to get VideoFrames
+              await this.setupMediaStreamTrackProcessor();
+              
+              resolve();
+            } catch (error) {
+              reject(error);
+            }
           });
           this.originalVideo.addEventListener('error', reject);
         });
       }
       
-      async renderQuadrant(quadrant, visibleRect) {
+      async setupMediaStreamTrackProcessor() {
         try {
-          // Create VideoFrame from the video element with visible rect
-          const videoFrame = new VideoFrame(this.originalVideo, {
+          // Check for MediaStreamTrackProcessor support
+          if (typeof MediaStreamTrackProcessor === 'undefined') {
+            throw new Error('MediaStreamTrackProcessor is not supported in this browser');
+          }
+          
+          // Capture stream from video element
+          const stream = this.originalVideo.captureStream();
+          const videoTrack = stream.getVideoTracks()[0];
+          
+          if (!videoTrack) {
+            throw new Error('No video track found in captured stream');
+          }
+          
+          // Create MediaStreamTrackProcessor
+          this.mediaStreamTrackProcessor = new MediaStreamTrackProcessor({ track: videoTrack });
+          this.frameReader = this.mediaStreamTrackProcessor.readable.getReader();
+          
+          console.log('MediaStreamTrackProcessor setup complete');
+          
+        } catch (error) {
+          console.error('Error setting up MediaStreamTrackProcessor:', error);
+          throw error;
+        }
+      }
+      
+      async getNextVideoFrame() {
+        if (!this.frameReader) {
+          throw new Error('MediaStreamTrackProcessor not initialized');
+        }
+        
+        try {
+          const { value: videoFrame, done } = await this.frameReader.read();
+          
+          if (done) {
+            throw new Error('Video stream ended');
+          }
+          
+          // Close previous frame if it exists
+          if (this.currentVideoFrame) {
+            this.currentVideoFrame.close();
+          }
+          
+          this.currentVideoFrame = videoFrame;
+          return videoFrame;
+          
+        } catch (error) {
+          console.error('Error reading VideoFrame from stream:', error);
+          throw error;
+        }
+      }
+      
+      async renderQuadrant(quadrant, visibleRect, sourceVideoFrame) {
+        try {
+          // Create VideoFrame with visible rect from the source VideoFrame
+          const videoFrame = new VideoFrame(sourceVideoFrame, {
             visibleRect: visibleRect
           });
           
@@ -457,7 +521,7 @@
           
           this.device.queue.submit([commandEncoder.finish()]);
           
-          // Clean up
+          // Clean up the cropped VideoFrame (not the source)
           videoFrame.close();
           
           return colorAttachment;
@@ -477,9 +541,23 @@
           'Coded Height': videoFrame.codedHeight || 'N/A',
           'Timestamp': videoFrame.timestamp ? `${videoFrame.timestamp}μs` : 'N/A',
           'Duration': videoFrame.duration ? `${videoFrame.duration}μs` : 'N/A',
-          'Flip': videoFrame.flip ? 'Yes' : 'No',
-          'Rotation': videoFrame.rotation || '0',
         };
+        
+        // Add VideoFrame metadata properties
+        if (videoFrame.metadata) {
+          if (videoFrame.metadata.rotate !== undefined) {
+            metadata['VideoFrame Rotate'] = `${videoFrame.metadata.rotate}°`;
+          }
+          if (videoFrame.metadata.flip !== undefined) {
+            metadata['VideoFrame Flip'] = videoFrame.metadata.flip;
+          }
+          
+          // Log all available metadata keys for debugging
+          const metadataKeys = Object.keys(videoFrame.metadata);
+          if (metadataKeys.length > 0) {
+            metadata['Available Metadata Keys'] = metadataKeys.join(', ');
+          }
+        }
         
         // Add color space information with better formatting
         if (videoFrame.colorSpace) {
@@ -493,84 +571,61 @@
           metadata['Color Space'] = 'N/A';
         }
         
-        // Check for transformation/rotation metadata from the source video element
-        const videoElement = this.originalVideo;
-        if (videoElement) {
-          // Get video track information if available
-          try {
-            const videoTracks = videoElement.videoTracks;
-            if (videoTracks && videoTracks.length > 0) {
-              const track = videoTracks[0];
-              if (track.getSettings) {
-                const settings = track.getSettings();
-                if (settings.displaySurface) {
-                  metadata['Display Surface'] = settings.displaySurface;
-                }
-                // Look for rotation/transformation properties in track settings
-                if (settings.aspectRatio) {
-                  metadata['Track Aspect Ratio'] = settings.aspectRatio;
-                }
-                if (settings.facingMode) {
-                  metadata['Facing Mode'] = settings.facingMode;
-                }
-                if (settings.frameRate) {
-                  metadata['Frame Rate'] = settings.frameRate;
-                }
-                // Check for rotation properties
-                if (settings.rotation !== undefined) {
-                  metadata['Track Rotation'] = `${settings.rotation}°`;
-                }
-                if (settings.orientation !== undefined) {
-                  metadata['Track Orientation'] = settings.orientation;
-                }
-                // Check for flip/mirror properties
-                if (settings.horizontalFlip !== undefined) {
-                  metadata['Horizontal Flip'] = settings.horizontalFlip;
-                }
-                if (settings.verticalFlip !== undefined) {
-                  metadata['Vertical Flip'] = settings.verticalFlip;
-                }
-                if (settings.mirrored !== undefined) {
-                  metadata['Mirrored'] = settings.mirrored;
-                }
-                // Check for transform matrix if available
-                if (settings.transform) {
-                  metadata['Track Transform'] = JSON.stringify(settings.transform);
-                }
+        // Note that track information is not directly available from VideoFrame
+        // when using MediaStreamTrackProcessor, but we can get it from the processor
+        if (this.mediaStreamTrackProcessor && this.mediaStreamTrackProcessor.track) {
+          const track = this.mediaStreamTrackProcessor.track;
+          
+          metadata['Track ID'] = track.id || 'N/A';
+          metadata['Track Kind'] = track.kind || 'N/A';
+          metadata['Track Label'] = track.label || 'N/A';
+          metadata['Track Enabled'] = track.enabled ? 'Yes' : 'No';
+          metadata['Track Ready State'] = track.readyState || 'N/A';
+          metadata['Track Muted'] = track.muted ? 'Yes' : 'No';
+          
+          // Get track settings if available
+          if (track.getSettings) {
+            try {
+              const settings = track.getSettings();
+              
+              if (settings.width) metadata['Track Width'] = settings.width;
+              if (settings.height) metadata['Track Height'] = settings.height;
+              if (settings.frameRate) metadata['Track Frame Rate'] = settings.frameRate;
+              if (settings.aspectRatio) metadata['Track Aspect Ratio'] = settings.aspectRatio;
+              if (settings.facingMode) metadata['Track Facing Mode'] = settings.facingMode;
+              
+              // Check for rotation/transformation properties
+              if (settings.rotation !== undefined) {
+                metadata['Track Rotation'] = `${settings.rotation}°`;
+              }
+              if (settings.orientation !== undefined) {
+                metadata['Track Orientation'] = settings.orientation;
+              }
+              if (settings.horizontalFlip !== undefined) {
+                metadata['Track Horizontal Flip'] = settings.horizontalFlip;
+              }
+              if (settings.verticalFlip !== undefined) {
+                metadata['Track Vertical Flip'] = settings.verticalFlip;
+              }
+              if (settings.mirrored !== undefined) {
+                metadata['Track Mirrored'] = settings.mirrored;
               }
               
-              // Check for track label that might contain transformation info
-              if (track.label) {
-                metadata['Track Label'] = track.label;
-              }
-              
-              // Check for track kind
-              if (track.kind) {
-                metadata['Track Kind'] = track.kind;
-              }
-              
-              // Check for any additional transformation properties on the track object itself
-              if (track.rotation !== undefined) {
-                metadata['Track Object Rotation'] = `${track.rotation}°`;
-              }
-              if (track.orientation !== undefined) {
-                metadata['Track Object Orientation'] = track.orientation;
-              }
+            } catch (e) {
+              metadata['Track Settings Error'] = e.message;
             }
-          } catch (e) {
-            // Silently ignore if video tracks are not accessible
           }
           
-          // Check for CSS transform or other rotation indicators
-          const computedStyle = window.getComputedStyle(videoElement);
-          if (computedStyle.transform && computedStyle.transform !== 'none') {
-            metadata['CSS Transform'] = computedStyle.transform;
-          }
-          
-          // Check video element properties that might indicate flip/rotation
-          if (videoElement.videoWidth && videoElement.videoHeight) {
-            const aspectRatio = (videoElement.videoWidth / videoElement.videoHeight).toFixed(3);
-            metadata['Video Aspect Ratio'] = aspectRatio;
+          // Get track constraints if available
+          if (track.getConstraints) {
+            try {
+              const constraints = track.getConstraints();
+              if (Object.keys(constraints).length > 0) {
+                metadata['Track Constraints'] = JSON.stringify(constraints);
+              }
+            } catch (e) {
+              // Silently ignore constraint errors
+            }
           }
         }
         
@@ -584,58 +639,80 @@
       async validateColors() {
         const results = [];
         
-        // Define the crop parameters for each quadrant
-        const videoWidth = this.originalVideo.videoWidth;
-        const videoHeight = this.originalVideo.videoHeight;
-        
-        const cropParams = {
-          topLeft: { 
-            x: 0, 
-            y: 0, 
-            width: videoWidth / 2, 
-            height: videoHeight / 2 
-          },
-          topRight: { 
-            x: videoWidth / 2, 
-            y: 0, 
-            width: videoWidth / 2, 
-            height: videoHeight / 2 
-          },
-          bottomLeft: { 
-            x: 0, 
-            y: videoHeight / 2, 
-            width: videoWidth / 2, 
-            height: videoHeight / 2 
-          },
-          bottomRight: { 
-            x: videoWidth / 2, 
-            y: videoHeight / 2, 
-            width: videoWidth / 2, 
-            height: videoHeight / 2 
+        try {
+          // Get the latest VideoFrame from MediaStreamTrackProcessor
+          const sourceVideoFrame = await this.getNextVideoFrame();
+          
+          if (!sourceVideoFrame) {
+            throw new Error('No VideoFrame available from MediaStreamTrackProcessor');
           }
-        };
-        
-        // Render and validate each quadrant
-        for (const [quadrant, rect] of Object.entries(cropParams)) {
-          try {
-            const texture = await this.renderQuadrant(quadrant, rect);
-            const isValid = await this.validateQuadrantColor(texture, quadrant);
-            
-            results.push({
-              quadrant,
-              expected: this.expectedColors[quadrant],
-              result: isValid ? 'PASS' : 'FAIL',
-              success: isValid
-            });
-            
-          } catch (error) {
-            results.push({
-              quadrant,
-              expected: this.expectedColors[quadrant],
-              result: `ERROR: ${error.message}`,
-              success: false
-            });
+          
+          // Define the crop parameters for each quadrant based on VideoFrame dimensions
+          const videoWidth = sourceVideoFrame.displayWidth || sourceVideoFrame.codedWidth;
+          const videoHeight = sourceVideoFrame.displayHeight || sourceVideoFrame.codedHeight;
+          
+          const cropParams = {
+            topLeft: { 
+              x: 0, 
+              y: 0, 
+              width: videoWidth / 2, 
+              height: videoHeight / 2 
+            },
+            topRight: { 
+              x: videoWidth / 2, 
+              y: 0, 
+              width: videoWidth / 2, 
+              height: videoHeight / 2 
+            },
+            bottomLeft: { 
+              x: 0, 
+              y: videoHeight / 2, 
+              width: videoWidth / 2, 
+              height: videoHeight / 2 
+            },
+            bottomRight: { 
+              x: videoWidth / 2, 
+              y: videoHeight / 2, 
+              width: videoWidth / 2, 
+              height: videoHeight / 2 
+            }
+          };
+          
+          // Render and validate each quadrant using the same source VideoFrame
+          for (const [quadrant, rect] of Object.entries(cropParams)) {
+            try {
+              const texture = await this.renderQuadrant(quadrant, rect, sourceVideoFrame);
+              const isValid = await this.validateQuadrantColor(texture, quadrant);
+              
+              results.push({
+                quadrant,
+                expected: this.expectedColors[quadrant],
+                result: isValid ? 'PASS' : 'FAIL',
+                success: isValid
+              });
+              
+            } catch (error) {
+              results.push({
+                quadrant,
+                expected: this.expectedColors[quadrant],
+                result: `ERROR: ${error.message}`,
+                success: false
+              });
+            }
           }
+          
+          // Clean up the source VideoFrame after processing all quadrants
+          if (sourceVideoFrame && sourceVideoFrame !== this.currentVideoFrame) {
+            sourceVideoFrame.close();
+          }
+          
+        } catch (error) {
+          results.push({
+            quadrant: 'All',
+            expected: 'N/A',
+            result: `STREAM ERROR: ${error.message}`,
+            success: false
+          });
         }
         
         this.displayResults(results);
@@ -741,20 +818,25 @@
             throw new Error('VideoFrame is not supported in this browser');
           }
           
+          // Check MediaStreamTrackProcessor support
+          if (typeof MediaStreamTrackProcessor === 'undefined') {
+            throw new Error('MediaStreamTrackProcessor is not supported in this browser');
+          }
+          
           // Initialize WebGPU
           if (!await this.initializeWebGPU()) {
             this.startBtn.disabled = false;
             return;
           }
           
-          // Load video
+          // Load video and setup MediaStreamTrackProcessor
           await this.loadVideo();
           
-          // Wait for video to have some frames
-          await new Promise(resolve => setTimeout(resolve, 500));
+          // Wait for video to have some frames and processor to be ready
+          await new Promise(resolve => setTimeout(resolve, 1000));
           
           this.isRunning = true;
-          this.updateStatus('Running test...', 'success');
+          this.updateStatus('Running test with MediaStreamTrackProcessor...', 'success');
           this.stopBtn.disabled = false;
           
           // Start the render loop
@@ -773,6 +855,22 @@
         if (this.animationId) {
           clearTimeout(this.animationId);
           this.animationId = null;
+        }
+        
+        // Clean up MediaStreamTrackProcessor
+        if (this.frameReader) {
+          this.frameReader.releaseLock();
+          this.frameReader = null;
+        }
+        
+        if (this.mediaStreamTrackProcessor) {
+          this.mediaStreamTrackProcessor = null;
+        }
+        
+        // Clean up current VideoFrame
+        if (this.currentVideoFrame) {
+          this.currentVideoFrame.close();
+          this.currentVideoFrame = null;
         }
         
         if (this.originalVideo) {
@@ -794,6 +892,10 @@
       document.getElementById('startBtn').disabled = true;
     } else if (typeof VideoFrame === 'undefined') {
       document.getElementById('status').textContent = 'VideoFrame API is not supported in this browser';
+      document.getElementById('status').className = 'status error';
+      document.getElementById('startBtn').disabled = true;
+    } else if (typeof MediaStreamTrackProcessor === 'undefined') {
+      document.getElementById('status').textContent = 'MediaStreamTrackProcessor is not supported in this browser';
       document.getElementById('status').className = 'status error';
       document.getElementById('startBtn').disabled = true;
     }
