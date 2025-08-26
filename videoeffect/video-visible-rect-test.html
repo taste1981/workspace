@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VideoFrame Visible Rect Test</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      background-color: #f5f5f5;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .control-panel {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .video-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+
+    .video-section {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .video-section h3 {
+      margin-top: 0;
+      color: #333;
+      text-align: center;
+    }
+
+    video {
+      width: 100%;
+      max-width: 300px;
+      border: 2px solid #ddd;
+      border-radius: 4px;
+      display: block;
+      margin: 0 auto;
+    }
+
+    canvas {
+      width: 100%;
+      max-width: 300px;
+      border: 2px solid #ddd;
+      border-radius: 4px;
+      display: block;
+      margin: 10px auto;
+      image-rendering: pixelated;
+    }
+
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-right: 10px;
+      margin-bottom: 10px;
+    }
+
+    .start-btn {
+      background-color: #4CAF50;
+      color: white;
+    }
+
+    .stop-btn {
+      background-color: #f44336;
+      color: white;
+    }
+
+    .start-btn:disabled, .stop-btn:disabled {
+      background-color: #ccc;
+      cursor: not-allowed;
+    }
+
+    .status {
+      padding: 10px;
+      border-radius: 4px;
+      margin: 10px 0;
+      font-weight: bold;
+    }
+
+    .status.info {
+      background-color: #d1ecf1;
+      color: #0c5460;
+    }
+
+    .status.error {
+      background-color: #f8d7da;
+      color: #721c24;
+    }
+
+    .status.success {
+      background-color: #d4edda;
+      color: #155724;
+    }
+
+    .results {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .result-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px;
+      margin: 5px 0;
+      border-radius: 4px;
+    }
+
+    .result-item.pass {
+      background-color: #d4edda;
+      color: #155724;
+    }
+
+    .result-item.fail {
+      background-color: #f8d7da;
+      color: #721c24;
+    }
+
+    .color-sample {
+      width: 20px;
+      height: 20px;
+      border: 1px solid #000;
+      display: inline-block;
+      margin: 0 5px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>VideoFrame Visible Rect Test</h1>
+    <p>Tests that VideoFrame with visibleRect parameter correctly crops video quadrants using WebGPU external textures.</p>
+
+    <div class="control-panel">
+      <h2>Controls</h2>
+      
+      <div style="margin-bottom: 15px;">
+        <label for="videoSelect" style="margin-right: 10px; font-weight: bold;">Select Video:</label>
+        <select id="videoSelect" style="padding: 5px; border-radius: 4px; border: 1px solid #ddd;">
+          <option value="four-colors-vp9-bt709.webm">four-colors-vp9-bt709.webm (BT.709)</option>
+          <option value="four-colors-vp9-bt601-vflip.mp4">four-colors-vp9-bt601-vflip.mp4 (BT.601)</option>
+        </select>
+      </div>
+      
+      <button id="startBtn" class="start-btn">Start Test</button>
+      <button id="stopBtn" class="stop-btn" disabled>Stop</button>
+      
+      <div id="status" class="status info">Click "Start Test" to begin</div>
+    </div>
+
+    <div class="video-grid">
+      <div class="video-section">
+        <h3>Original Video</h3>
+        <video id="originalVideo" loop muted></video>
+        <p id="videoDescription">Select a video to see description...</p>
+        <p><em>Note: Raw video data contains Yellow(TL), Red(TR), Blue(BL), Green(BR). HTML video element may display differently due to rotation metadata, but VideoFrame visibleRect operates on raw data coordinates.</em></p>
+        
+        <div id="videoFrameMetadata" style="margin-top: 15px; padding: 10px; background-color: #f8f9fa; border-radius: 4px; font-family: monospace; font-size: 12px; word-wrap: break-word; overflow-wrap: break-word;">
+          <strong>VideoFrame Metadata:</strong>
+          <div id="metadataContent" style="margin-top: 8px; line-height: 1.4;">Click "Start Test" to see metadata...</div>
+        </div>
+      </div>
+      
+      <div class="video-section">
+        <h3>Top-Left Quadrant (Yellow)</h3>
+        <canvas id="topLeftCanvas" width="256" height="256"></canvas>
+        <p>Raw data top-left quadrant using visibleRect</p>
+      </div>
+      
+      <div class="video-section">
+        <h3>Top-Right Quadrant (Red)</h3>
+        <canvas id="topRightCanvas" width="256" height="256"></canvas>
+        <p>Raw data top-right quadrant using visibleRect</p>
+      </div>
+      
+      <div class="video-section">
+        <h3>Bottom-Left Quadrant (Blue)</h3>
+        <canvas id="bottomLeftCanvas" width="256" height="256"></canvas>
+        <p>Raw data bottom-left quadrant using visibleRect</p>
+      </div>
+      
+      <div class="video-section">
+        <h3>Bottom-Right Quadrant (Green)</h3>
+        <canvas id="bottomRightCanvas" width="256" height="256"></canvas>
+        <p>Raw data bottom-right quadrant using visibleRect</p>
+      </div>
+    </div>
+
+    <div class="results">
+      <h2>Test Results</h2>
+      <div id="testResults">
+        <p>Test results will appear here after running the test...</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    class VideoVisibleRectTest {
+      constructor() {
+        this.device = null;
+        this.pipeline = null;
+        this.isRunning = false;
+        this.animationId = null;
+        
+        // Expected colors for each quadrant (based on the test video)
+        this.expectedColors = {
+          topLeft: [255, 255, 0, 255],     // Yellow
+          topRight: [255, 0, 0, 255],      // Red
+          bottomLeft: [0, 0, 255, 255],    // Blue
+          bottomRight: [0, 255, 0, 255]    // Green
+        };
+        
+        // DOM elements
+        this.startBtn = document.getElementById('startBtn');
+        this.stopBtn = document.getElementById('stopBtn');
+        this.statusDiv = document.getElementById('status');
+        this.originalVideo = document.getElementById('originalVideo');
+        this.testResultsDiv = document.getElementById('testResults');
+        this.metadataContentDiv = document.getElementById('metadataContent');
+        this.videoSelect = document.getElementById('videoSelect');
+        this.videoDescription = document.getElementById('videoDescription');
+        
+        this.canvases = {
+          topLeft: document.getElementById('topLeftCanvas'),
+          topRight: document.getElementById('topRightCanvas'),
+          bottomLeft: document.getElementById('bottomLeftCanvas'),
+          bottomRight: document.getElementById('bottomRightCanvas')
+        };
+        
+        this.bindEvents();
+        
+        // Set initial video description
+        this.updateVideoDescription();
+      }
+      
+      bindEvents() {
+        this.startBtn.addEventListener('click', () => this.start());
+        this.stopBtn.addEventListener('click', () => this.stop());
+        this.videoSelect.addEventListener('change', () => this.onVideoChange());
+      }
+      
+      onVideoChange() {
+        // Stop current test if running
+        if (this.isRunning) {
+          this.stop();
+        }
+        
+        // Update description
+        this.updateVideoDescription();
+        
+        // Clear metadata
+        this.metadataContentDiv.innerHTML = 'Click "Start Test" to see metadata...';
+        
+        // Clear results
+        this.testResultsDiv.innerHTML = '<p>Test results will appear here after running the test...</p>';
+      }
+      
+      updateVideoDescription() {
+        const selectedVideo = this.videoSelect.value;
+        const descriptions = {
+          'four-colors-vp9-bt709.webm': 'four-colors-vp9-bt709.webm - Test video with four colored quadrants (BT.709 color space)',
+          'four-colors-vp9-bt601-vflip.mp4': 'four-colors-vp9-bt601-vflip.mp4 - Test video with four colored quadrants (BT.601 limited range, vflip metadata)'
+        };
+        
+        this.videoDescription.textContent = descriptions[selectedVideo] || 'Unknown video selected';
+      }
+      
+      bindEvents() {
+        this.startBtn.addEventListener('click', () => this.start());
+        this.stopBtn.addEventListener('click', () => this.stop());
+      }
+      
+      updateStatus(message, type = 'info') {
+        this.statusDiv.textContent = message;
+        this.statusDiv.className = `status ${type}`;
+      }
+      
+      async initializeWebGPU() {
+        try {
+          if (!navigator.gpu) {
+            throw new Error('WebGPU not supported in this browser');
+          }
+          
+          const adapter = await navigator.gpu.requestAdapter();
+          if (!adapter) {
+            throw new Error('WebGPU adapter not available');
+          }
+          
+          this.device = await adapter.requestDevice();
+          
+          // Create render pipeline for external texture sampling
+          this.createRenderPipeline();
+          
+          return true;
+        } catch (error) {
+          this.updateStatus(`WebGPU initialization failed: ${error.message}`, 'error');
+          return false;
+        }
+      }
+      
+      createRenderPipeline() {
+        const vertexShader = this.device.createShaderModule({
+          code: `
+            struct VertexOutput {
+              @builtin(position) Position : vec4f,
+              @location(0) fragUV : vec2f,
+            }
+
+            @vertex fn main(@builtin(vertex_index) VertexIndex : u32) -> VertexOutput {
+                const pos = array(
+                  vec2( 1.0,  1.0),
+                  vec2( 1.0, -1.0),
+                  vec2(-1.0, -1.0),
+                  vec2( 1.0,  1.0),
+                  vec2(-1.0, -1.0),
+                  vec2(-1.0,  1.0),
+                );
+
+                const uv = array(
+                  vec2(1.0, 0.0),
+                  vec2(1.0, 1.0),
+                  vec2(0.0, 1.0),
+                  vec2(1.0, 0.0),
+                  vec2(0.0, 1.0),
+                  vec2(0.0, 0.0),
+                );
+
+                var output : VertexOutput;
+                output.Position = vec4(pos[VertexIndex], 0.0, 1.0);
+                output.fragUV = uv[VertexIndex];
+                return output;
+            }
+          `
+        });
+        
+        const fragmentShader = this.device.createShaderModule({
+          code: `
+            @group(0) @binding(0) var s : sampler;
+            @group(0) @binding(1) var t : texture_external;
+
+            @fragment fn main(@location(0) fragUV : vec2f)
+                                     -> @location(0) vec4f {
+                return textureSampleBaseClampToEdge(t, s, fragUV);
+            }
+          `
+        });
+        
+        this.pipeline = this.device.createRenderPipeline({
+          layout: 'auto',
+          vertex: {
+            module: vertexShader,
+            entryPoint: 'main',
+          },
+          fragment: {
+            module: fragmentShader,
+            entryPoint: 'main',
+            targets: [{
+              format: 'rgba8unorm',
+            }],
+          },
+          primitive: { topology: 'triangle-list' },
+        });
+      }
+      
+      async loadVideo() {
+        return new Promise((resolve, reject) => {
+          const selectedVideo = this.videoSelect.value;
+          this.originalVideo.src = selectedVideo;
+          this.originalVideo.addEventListener('loadeddata', () => {
+            this.originalVideo.play();
+            resolve();
+          });
+          this.originalVideo.addEventListener('error', reject);
+        });
+      }
+      
+      async renderQuadrant(quadrant, visibleRect) {
+        try {
+          // Create VideoFrame from the video element with visible rect
+          const videoFrame = new VideoFrame(this.originalVideo, {
+            visibleRect: visibleRect
+          });
+          
+          // Display metadata for the first quadrant only (to avoid spam)
+          if (quadrant === 'topLeft') {
+            this.displayVideoFrameMetadata(videoFrame);
+          }
+          
+          // Create external texture with proper color space handling
+          const externalTexture = this.device.importExternalTexture({
+            source: videoFrame,
+            colorSpace: 'srgb'  // This should handle BT.601 -> sRGB conversion
+          });
+          
+          // Create sampler
+          const sampler = this.device.createSampler({
+            magFilter: 'linear',
+            minFilter: 'linear'
+          });
+          
+          // Create bind group
+          const bindGroup = this.device.createBindGroup({
+            layout: this.pipeline.getBindGroupLayout(0),
+            entries: [
+              { binding: 0, resource: sampler },
+              { binding: 1, resource: externalTexture }
+            ],
+          });
+          
+          // Get canvas context and configure for WebGPU
+          const canvas = this.canvases[quadrant];
+          const context = canvas.getContext('webgpu');
+          context.configure({
+            device: this.device,
+            format: 'rgba8unorm',
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+          });
+          
+          const colorAttachment = context.getCurrentTexture();
+          
+          // Render
+          const commandEncoder = this.device.createCommandEncoder();
+          const passEncoder = commandEncoder.beginRenderPass({
+            colorAttachments: [{
+              view: colorAttachment.createView(),
+              clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+              loadOp: 'clear',
+              storeOp: 'store',
+            }],
+          });
+          
+          passEncoder.setPipeline(this.pipeline);
+          passEncoder.setBindGroup(0, bindGroup);
+          passEncoder.draw(6);
+          passEncoder.end();
+          
+          this.device.queue.submit([commandEncoder.finish()]);
+          
+          // Clean up
+          videoFrame.close();
+          
+          return colorAttachment;
+          
+        } catch (error) {
+          console.error(`Error rendering ${quadrant} quadrant:`, error);
+          throw error;
+        }
+      }
+      
+      displayVideoFrameMetadata(videoFrame) {
+        const metadata = {
+          'Format': videoFrame.format || 'Unknown',
+          'Display Width': videoFrame.displayWidth || 'N/A',
+          'Display Height': videoFrame.displayHeight || 'N/A',
+          'Coded Width': videoFrame.codedWidth || 'N/A',
+          'Coded Height': videoFrame.codedHeight || 'N/A',
+          'Timestamp': videoFrame.timestamp ? `${videoFrame.timestamp}μs` : 'N/A',
+          'Duration': videoFrame.duration ? `${videoFrame.duration}μs` : 'N/A'
+        };
+        
+        // Add color space information with better formatting
+        if (videoFrame.colorSpace) {
+          const colorSpace = videoFrame.colorSpace;
+          metadata['Color Space - Primaries'] = colorSpace.primaries || 'N/A';
+          metadata['Color Space - Transfer'] = colorSpace.transfer || 'N/A';
+          metadata['Color Space - Matrix'] = colorSpace.matrix || 'N/A';
+          metadata['Color Space - Range'] = colorSpace.fullRange !== undefined ? 
+            (colorSpace.fullRange ? 'Full' : 'Limited') : 'N/A';
+        } else {
+          metadata['Color Space'] = 'N/A';
+        }
+        
+        // Check for transformation/rotation metadata from the source video element
+        const videoElement = this.originalVideo;
+        if (videoElement) {
+          // Get video track information if available
+          try {
+            const videoTracks = videoElement.videoTracks;
+            if (videoTracks && videoTracks.length > 0) {
+              const track = videoTracks[0];
+              if (track.getSettings) {
+                const settings = track.getSettings();
+                if (settings.displaySurface) {
+                  metadata['Display Surface'] = settings.displaySurface;
+                }
+                // Look for rotation/transformation properties in track settings
+                if (settings.aspectRatio) {
+                  metadata['Track Aspect Ratio'] = settings.aspectRatio;
+                }
+                if (settings.facingMode) {
+                  metadata['Facing Mode'] = settings.facingMode;
+                }
+                if (settings.frameRate) {
+                  metadata['Frame Rate'] = settings.frameRate;
+                }
+              }
+              
+              // Check for track label that might contain transformation info
+              if (track.label) {
+                metadata['Track Label'] = track.label;
+              }
+              
+              // Check for track kind
+              if (track.kind) {
+                metadata['Track Kind'] = track.kind;
+              }
+            }
+          } catch (e) {
+            // Silently ignore if video tracks are not accessible
+          }
+          
+          // Check for CSS transform or other rotation indicators
+          const computedStyle = window.getComputedStyle(videoElement);
+          if (computedStyle.transform && computedStyle.transform !== 'none') {
+            metadata['CSS Transform'] = computedStyle.transform;
+          }
+          
+          // Check video element properties that might indicate flip/rotation
+          if (videoElement.videoWidth && videoElement.videoHeight) {
+            const aspectRatio = (videoElement.videoWidth / videoElement.videoHeight).toFixed(3);
+            metadata['Video Aspect Ratio'] = aspectRatio;
+          }
+        }
+        
+        const metadataHtml = Object.entries(metadata)
+          .map(([key, value]) => `<div style="margin: 2px 0;"><strong>${key}:</strong> <span style="word-break: break-all;">${value}</span></div>`)
+          .join('');
+          
+        this.metadataContentDiv.innerHTML = metadataHtml;
+      }
+      
+      async validateColors() {
+        const results = [];
+        
+        // Define the crop parameters for each quadrant
+        const videoWidth = this.originalVideo.videoWidth;
+        const videoHeight = this.originalVideo.videoHeight;
+        
+        const cropParams = {
+          topLeft: { 
+            x: 0, 
+            y: 0, 
+            width: videoWidth / 2, 
+            height: videoHeight / 2 
+          },
+          topRight: { 
+            x: videoWidth / 2, 
+            y: 0, 
+            width: videoWidth / 2, 
+            height: videoHeight / 2 
+          },
+          bottomLeft: { 
+            x: 0, 
+            y: videoHeight / 2, 
+            width: videoWidth / 2, 
+            height: videoHeight / 2 
+          },
+          bottomRight: { 
+            x: videoWidth / 2, 
+            y: videoHeight / 2, 
+            width: videoWidth / 2, 
+            height: videoHeight / 2 
+          }
+        };
+        
+        // Render and validate each quadrant
+        for (const [quadrant, rect] of Object.entries(cropParams)) {
+          try {
+            const texture = await this.renderQuadrant(quadrant, rect);
+            const isValid = await this.validateQuadrantColor(texture, quadrant);
+            
+            results.push({
+              quadrant,
+              expected: this.expectedColors[quadrant],
+              result: isValid ? 'PASS' : 'FAIL',
+              success: isValid
+            });
+            
+          } catch (error) {
+            results.push({
+              quadrant,
+              expected: this.expectedColors[quadrant],
+              result: `ERROR: ${error.message}`,
+              success: false
+            });
+          }
+        }
+        
+        this.displayResults(results);
+        return results;
+      }
+      
+      async validateQuadrantColor(texture, quadrant) {
+        try {
+          // Create buffer to read back texture data
+          const buffer = this.device.createBuffer({
+            size: 256 * 256 * 4, // RGBA
+            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+          });
+          
+          // Copy texture to buffer
+          const commandEncoder = this.device.createCommandEncoder();
+          commandEncoder.copyTextureToBuffer(
+            { texture },
+            { buffer, bytesPerRow: 256 * 4 },
+            [256, 256, 1]
+          );
+          this.device.queue.submit([commandEncoder.finish()]);
+          
+          // Read buffer data
+          await buffer.mapAsync(GPUMapMode.READ);
+          const arrayBuffer = buffer.getMappedRange();
+          const data = new Uint8Array(arrayBuffer);
+          
+          // Sample center pixel
+          const centerX = 128;
+          const centerY = 128;
+          const pixelOffset = (centerY * 256 + centerX) * 4;
+          
+          const actualColor = [
+            data[pixelOffset],     // R
+            data[pixelOffset + 1], // G
+            data[pixelOffset + 2], // B
+            data[pixelOffset + 3]  // A
+          ];
+          
+          const expectedColor = this.expectedColors[quadrant];
+          
+          // Allow some tolerance for color comparison (due to video compression)
+          const tolerance = 30;
+          const isValid = actualColor.every((value, index) => 
+            Math.abs(value - expectedColor[index]) <= tolerance
+          );
+          
+          console.log(`${quadrant}: Expected [${expectedColor.join(', ')}], Got [${actualColor.join(', ')}], Valid: ${isValid}`);
+          
+          buffer.unmap();
+          buffer.destroy();
+          
+          return isValid;
+          
+        } catch (error) {
+          console.error(`Error validating ${quadrant} color:`, error);
+          return false;
+        }
+      }
+      
+      displayResults(results) {
+        const resultHTML = results.map(result => {
+          const colorStyle = `background-color: rgb(${result.expected.slice(0,3).join(',')})`;
+          return `
+            <div class="result-item ${result.success ? 'pass' : 'fail'}">
+              <span>
+                <strong>${result.quadrant.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}:</strong> 
+                ${result.result}
+                <span class="color-sample" style="${colorStyle}"></span>
+              </span>
+            </div>
+          `;
+        }).join('');
+        
+        const summary = results.every(r => r.success) ? 
+          '<p style="color: green; font-weight: bold;">✅ All tests passed! VideoFrame visibleRect is working correctly.</p>' :
+          '<p style="color: red; font-weight: bold;">❌ Some tests failed. Check the individual results above.</p>';
+        
+        this.testResultsDiv.innerHTML = summary + resultHTML;
+      }
+      
+      async renderLoop() {
+        if (!this.isRunning) return;
+        
+        try {
+          await this.validateColors();
+        } catch (error) {
+          console.error('Error in render loop:', error);
+        }
+        
+        // Continue the loop
+        this.animationId = setTimeout(() => this.renderLoop(), 1000); // Update every second
+      }
+      
+      async start() {
+        this.updateStatus('Initializing...', 'info');
+        this.startBtn.disabled = true;
+        
+        try {
+          // Check VideoFrame support
+          if (typeof VideoFrame === 'undefined') {
+            throw new Error('VideoFrame is not supported in this browser');
+          }
+          
+          // Initialize WebGPU
+          if (!await this.initializeWebGPU()) {
+            this.startBtn.disabled = false;
+            return;
+          }
+          
+          // Load video
+          await this.loadVideo();
+          
+          // Wait for video to have some frames
+          await new Promise(resolve => setTimeout(resolve, 500));
+          
+          this.isRunning = true;
+          this.updateStatus('Running test...', 'success');
+          this.stopBtn.disabled = false;
+          
+          // Start the render loop
+          this.renderLoop();
+          
+        } catch (error) {
+          this.updateStatus(`Failed to start: ${error.message}`, 'error');
+          this.startBtn.disabled = false;
+        }
+      }
+      
+      stop() {
+        this.isRunning = false;
+        this.updateStatus('Stopped', 'info');
+        
+        if (this.animationId) {
+          clearTimeout(this.animationId);
+          this.animationId = null;
+        }
+        
+        if (this.originalVideo) {
+          this.originalVideo.pause();
+        }
+        
+        this.startBtn.disabled = false;
+        this.stopBtn.disabled = true;
+      }
+    }
+    
+    // Initialize the application
+    const test = new VideoVisibleRectTest();
+    
+    // Check support on page load
+    if (!navigator.gpu) {
+      document.getElementById('status').textContent = 'WebGPU is not supported in this browser';
+      document.getElementById('status').className = 'status error';
+      document.getElementById('startBtn').disabled = true;
+    } else if (typeof VideoFrame === 'undefined') {
+      document.getElementById('status').textContent = 'VideoFrame API is not supported in this browser';
+      document.getElementById('status').className = 'status error';
+      document.getElementById('startBtn').disabled = true;
+    }
+  </script>
+</body>
+
+</html>
