@@ -476,7 +476,9 @@
           'Coded Width': videoFrame.codedWidth || 'N/A',
           'Coded Height': videoFrame.codedHeight || 'N/A',
           'Timestamp': videoFrame.timestamp ? `${videoFrame.timestamp}μs` : 'N/A',
-          'Duration': videoFrame.duration ? `${videoFrame.duration}μs` : 'N/A'
+          'Duration': videoFrame.duration ? `${videoFrame.duration}μs` : 'N/A',
+          'Flip': videoFrame.flip ? 'Yes' : 'No',
+          'Rotation': videoFrame.rotation || '0',
         };
         
         // Add color space information with better formatting
@@ -514,6 +516,27 @@
                 if (settings.frameRate) {
                   metadata['Frame Rate'] = settings.frameRate;
                 }
+                // Check for rotation properties
+                if (settings.rotation !== undefined) {
+                  metadata['Track Rotation'] = `${settings.rotation}°`;
+                }
+                if (settings.orientation !== undefined) {
+                  metadata['Track Orientation'] = settings.orientation;
+                }
+                // Check for flip/mirror properties
+                if (settings.horizontalFlip !== undefined) {
+                  metadata['Horizontal Flip'] = settings.horizontalFlip;
+                }
+                if (settings.verticalFlip !== undefined) {
+                  metadata['Vertical Flip'] = settings.verticalFlip;
+                }
+                if (settings.mirrored !== undefined) {
+                  metadata['Mirrored'] = settings.mirrored;
+                }
+                // Check for transform matrix if available
+                if (settings.transform) {
+                  metadata['Track Transform'] = JSON.stringify(settings.transform);
+                }
               }
               
               // Check for track label that might contain transformation info
@@ -524,6 +547,14 @@
               // Check for track kind
               if (track.kind) {
                 metadata['Track Kind'] = track.kind;
+              }
+              
+              // Check for any additional transformation properties on the track object itself
+              if (track.rotation !== undefined) {
+                metadata['Track Object Rotation'] = `${track.rotation}°`;
+              }
+              if (track.orientation !== undefined) {
+                metadata['Track Object Orientation'] = track.orientation;
               }
             }
           } catch (e) {
