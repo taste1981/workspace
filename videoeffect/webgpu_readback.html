@@ -5,6 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>WebGPU Video Processor</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎥</text></svg>" />
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -155,17 +156,19 @@
       
       <div class="checkbox-container">
         <label>
-          <input type="checkbox" id="showInputVideo" />
-          Show Original Input Video (camera feed)
+          <input type="checkbox" id="useWebGL2" />
+          Use WebGL2 Implementation (instead of WebGPU for processing and readback)
         </label>
       </div>
       
       <div class="checkbox-container">
         <label>
-          <input type="checkbox" id="showReadbackVideo" />
-          Show Readback Video (255×144 scaled output - only works when readback is enabled)
+          <input type="checkbox" id="showInputVideo" />
+          Show Original Input Video (camera feed)
         </label>
       </div>
+      
+
 
       <div id="status" class="status info">Click "Start Camera" to begin</div>
 
@@ -186,6 +189,10 @@
           <div class="stat-label">Output Resolution</div>
           <div class="stat-value" id="outputResolution">--</div>
         </div>
+        <div class="stat-item">
+          <div class="stat-label">GPU Backend</div>
+          <div class="stat-value" id="gpuBackend">--</div>
+        </div>
       </div>
     </div>
 
@@ -198,11 +205,6 @@
       <div class="video-section">
         <h3>Output Video (WebGPU Processed)</h3>
         <video id="outputVideo" autoplay playsinline muted></video>
-      </div>
-      
-      <div class="video-section" id="readbackVideoSection" style="display: none;">
-        <h3>Readback Video (255×144)</h3>
-        <canvas id="readbackCanvas" width="255" height="144" style="border: 2px solid #ddd; border-radius: 4px; max-width: 320px;"></canvas>
       </div>
     </div>
   </div>
@@ -219,6 +221,7 @@
         this.outputStream = null;
         this.isProcessing = false;
         this.enableReadback = false;
+        this.useWebGL2 = false;
         
         // Performance tracking
         this.frameCount = 0;
@@ -226,29 +229,38 @@
         this.lastFpsTime = performance.now();
         this.lastReadbackTime = performance.now();
         
-        // GPU resources
+        // WebGPU resources
         this.inputTexture = null;
         this.scaledTexture = null;
         this.outputBuffer = null;
         this.stagingBuffer = null;
         this.scalingPipeline = null;
         
+        // WebGL2 resources
+        this.gl = null;
+        this.inputCanvas = null;
+        this.outputCanvas = null;
+        this.scalingProgram = null;
+        this.inputTexture2D = null;
+        this.scaledTexture2D = null;
+        this.framebuffer = null;
+        this.readbackPixels = null;
+        
         // DOM elements
         this.startBtn = document.getElementById('startBtn');
         this.stopBtn = document.getElementById('stopBtn');
         this.enableReadbackCheckbox = document.getElementById('enableReadback');
+        this.useWebGL2Checkbox = document.getElementById('useWebGL2');
         this.showInputVideoCheckbox = document.getElementById('showInputVideo');
-        this.showReadbackVideoCheckbox = document.getElementById('showReadbackVideo');
         this.statusDiv = document.getElementById('status');
         this.inputVideo = document.getElementById('inputVideo');
         this.outputVideo = document.getElementById('outputVideo');
         this.inputVideoSection = document.getElementById('inputVideoSection');
-        this.readbackVideoSection = document.getElementById('readbackVideoSection');
-        this.readbackCanvas = document.getElementById('readbackCanvas');
         this.processingFpsSpan = document.getElementById('processingFps');
         this.readbackFpsSpan = document.getElementById('readbackFps');
         this.inputResolutionSpan = document.getElementById('inputResolution');
         this.outputResolutionSpan = document.getElementById('outputResolution');
+        this.gpuBackendSpan = document.getElementById('gpuBackend');
         
         this.bindEvents();
       }
@@ -258,30 +270,18 @@
         this.stopBtn.addEventListener('click', () => this.stop());
         this.enableReadbackCheckbox.addEventListener('change', (e) => {
           this.enableReadback = e.target.checked;
-          // Hide readback video if readback is disabled
-          if (!this.enableReadback) {
-            this.showReadbackVideoCheckbox.checked = false;
-            this.readbackVideoSection.style.display = 'none';
-          }
+        });
+        this.useWebGL2Checkbox.addEventListener('change', (e) => {
+          this.useWebGL2 = e.target.checked;
+          this.updateGpuBackendDisplay();
         });
         this.showInputVideoCheckbox.addEventListener('change', (e) => {
           this.inputVideoSection.style.display = e.target.checked ? 'block' : 'none';
         });
-        this.showReadbackVideoCheckbox.addEventListener('change', (e) => {
-          // Only show readback video if readback is enabled
-          if (e.target.checked && this.enableReadback) {
-            this.readbackVideoSection.style.display = 'block';
-          } else {
-            this.readbackVideoSection.style.display = 'none';
-            if (!this.enableReadback) {
-              this.showReadbackVideoCheckbox.checked = false;
-              // Show warning if user tries to enable readback video without readback enabled
-              if (e.target.checked) {
-                alert('Please enable GPU Readback first to show readback video.');
-              }
-            }
-          }
-        });
+      }
+      
+      updateGpuBackendDisplay() {
+        this.gpuBackendSpan.textContent = this.useWebGL2 ? 'WebGL2' : 'WebGPU';
       }
       
       updateStatus(message, type = 'info') {
@@ -330,6 +330,119 @@
           this.updateStatus(`WebGPU initialization failed: ${error.message}`, 'error');
           return false;
         }
+      }
+      
+      initializeWebGL2() {
+        try {
+          // Create offscreen canvases for WebGL2 processing (no DOM overhead)
+          this.inputCanvas = new OffscreenCanvas(1, 1); // Will be resized dynamically
+          this.outputCanvas = new OffscreenCanvas(1, 1); // Will be resized dynamically
+          
+          this.gl = this.outputCanvas.getContext('webgl2');
+          if (!this.gl) {
+            throw new Error('WebGL2 not supported in this browser');
+          }
+          
+          // Create scaling shader program
+          this.createWebGL2ScalingProgram();
+          
+          // Initialize WebGL2 resources
+          this.initializeWebGL2Resources();
+          
+          return true;
+        } catch (error) {
+          this.updateStatus(`WebGL2 initialization failed: ${error.message}`, 'error');
+          return false;
+        }
+      }
+      
+      createWebGL2ScalingProgram() {
+        const vertexShaderSource = `#version 300 es
+          in vec2 a_position;
+          in vec2 a_texCoord;
+          out vec2 v_texCoord;
+          
+          void main() {
+            gl_Position = vec4(a_position, 0.0, 1.0);
+            v_texCoord = a_texCoord;
+          }
+        `;
+        
+        const fragmentShaderSource = `#version 300 es
+          precision mediump float;
+          
+          uniform sampler2D u_texture;
+          in vec2 v_texCoord;
+          out vec4 fragColor;
+          
+          void main() {
+            fragColor = texture(u_texture, v_texCoord);
+          }
+        `;
+        
+        const vertexShader = this.createShader(this.gl.VERTEX_SHADER, vertexShaderSource);
+        const fragmentShader = this.createShader(this.gl.FRAGMENT_SHADER, fragmentShaderSource);
+        
+        this.scalingProgram = this.gl.createProgram();
+        this.gl.attachShader(this.scalingProgram, vertexShader);
+        this.gl.attachShader(this.scalingProgram, fragmentShader);
+        this.gl.linkProgram(this.scalingProgram);
+        
+        if (!this.gl.getProgramParameter(this.scalingProgram, this.gl.LINK_STATUS)) {
+          throw new Error('WebGL2 program linking failed: ' + this.gl.getProgramInfoLog(this.scalingProgram));
+        }
+      }
+      
+      createShader(type, source) {
+        const shader = this.gl.createShader(type);
+        this.gl.shaderSource(shader, source);
+        this.gl.compileShader(shader);
+        
+        if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
+          const error = this.gl.getShaderInfoLog(shader);
+          this.gl.deleteShader(shader);
+          throw new Error('WebGL2 shader compilation failed: ' + error);
+        }
+        
+        return shader;
+      }
+      
+      initializeWebGL2Resources() {
+        // Create vertex buffer for fullscreen quad
+        const positions = new Float32Array([
+          -1, -1,  0, 1,
+           1, -1,  1, 1,
+          -1,  1,  0, 0,
+           1,  1,  1, 0,
+        ]);
+        
+        const positionBuffer = this.gl.createBuffer();
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, positionBuffer);
+        this.gl.bufferData(this.gl.ARRAY_BUFFER, positions, this.gl.STATIC_DRAW);
+        
+        // Create VAO
+        this.vao = this.gl.createVertexArray();
+        this.gl.bindVertexArray(this.vao);
+        
+        // Set up attributes
+        const positionLocation = this.gl.getAttribLocation(this.scalingProgram, 'a_position');
+        const texCoordLocation = this.gl.getAttribLocation(this.scalingProgram, 'a_texCoord');
+        
+        this.gl.enableVertexAttribArray(positionLocation);
+        this.gl.vertexAttribPointer(positionLocation, 2, this.gl.FLOAT, false, 16, 0);
+        
+        this.gl.enableVertexAttribArray(texCoordLocation);
+        this.gl.vertexAttribPointer(texCoordLocation, 2, this.gl.FLOAT, false, 16, 8);
+        
+        // Create textures
+        this.inputTexture2D = this.gl.createTexture();
+        this.scaledTexture2D = this.gl.createTexture();
+        
+        // Create framebuffer for scaled rendering
+        this.framebuffer = this.gl.createFramebuffer();
+        
+        // Initialize readback pixel array
+        this.readbackPixels = new Uint8Array(255 * 144 * 4);
       }
       
       async initializeCamera() {
@@ -506,49 +619,23 @@
           const width = videoFrame.displayWidth;
           const height = videoFrame.displayHeight;
           
-          // Create or recreate input texture if size changed
-          if (!this.inputTexture || 
-              this.inputTexture.width !== width || 
-              this.inputTexture.height !== height) {
-            
-            if (this.inputTexture) this.inputTexture.destroy();
-            
-            this.inputTexture = this.device.createTexture({
-              size: [width, height, 1],
-              format: 'rgba8unorm',
-              usage: GPUTextureUsage.TEXTURE_BINDING | 
-                     GPUTextureUsage.COPY_DST | 
-                     GPUTextureUsage.COPY_SRC |
-                     GPUTextureUsage.RENDER_ATTACHMENT,
-            });
+          let outputVideoFrame;
+          
+          if (this.useWebGL2) {
+            // Process with WebGL2
+            outputVideoFrame = await this.processWithWebGL2(videoFrame, width, height);
+          } else {
+            // Process with WebGPU
+            outputVideoFrame = await this.processWithWebGPU(videoFrame, width, height);
           }
-          
-          // Upload VideoFrame to GPU texture using copyExternalImageToTexture
-          this.device.queue.copyExternalImageToTexture(
-            { source: videoFrame },
-            { texture: this.inputTexture },
-            [width, height, 1]
-          );
-          
-          // Optional: Perform readback
-          if (this.enableReadback) {
-            // Always recreate buffers for readback to ensure they're fresh
-            this.createGPUBuffers(width, height);
-            await this.performReadback(width, height);
-          }
-          
-          // Create output VideoFrame from the same GPU texture
-          // In a real application, you would process the texture here
-          const outputVideoFrame = new VideoFrame(videoFrame, {
-            timestamp: videoFrame.timestamp,
-            duration: videoFrame.duration
-          });
           
           // Write processed frame to MediaStreamTrackGenerator
-          await this.writer.write(outputVideoFrame);
+          if (outputVideoFrame) {
+            await this.writer.write(outputVideoFrame);
+            outputVideoFrame.close();
+          }
           
           // Clean up
-          outputVideoFrame.close();
           videoFrame.close();
           
           // Update statistics
@@ -556,7 +643,6 @@
           this.updateStats();
           
           // Continue processing immediately to handle the next frame
-          // This will naturally run at the video source frame rate (30fps)
           this.processVideoFrame();
           
         } catch (error) {
@@ -568,7 +654,132 @@
         }
       }
       
-      async performReadback(width, height) {
+      async processWithWebGPU(videoFrame, width, height) {
+        // Create or recreate input texture if size changed
+        if (!this.inputTexture || 
+            this.inputTexture.width !== width || 
+            this.inputTexture.height !== height) {
+          
+          if (this.inputTexture) this.inputTexture.destroy();
+          
+          this.inputTexture = this.device.createTexture({
+            size: [width, height, 1],
+            format: 'rgba8unorm',
+            usage: GPUTextureUsage.TEXTURE_BINDING | 
+                   GPUTextureUsage.COPY_DST | 
+                   GPUTextureUsage.COPY_SRC |
+                   GPUTextureUsage.RENDER_ATTACHMENT,
+          });
+        }
+        
+        // Upload VideoFrame to GPU texture using copyExternalImageToTexture
+        this.device.queue.copyExternalImageToTexture(
+          { source: videoFrame },
+          { texture: this.inputTexture },
+          [width, height, 1]
+        );
+        
+        // Optional: Perform readback
+        if (this.enableReadback) {
+          // Always recreate buffers for readback to ensure they're fresh
+          this.createGPUBuffers(width, height);
+          await this.performWebGPUReadback(width, height);
+        }
+        
+        // Create output VideoFrame from the same GPU texture
+        return new VideoFrame(videoFrame, {
+          timestamp: videoFrame.timestamp,
+          duration: videoFrame.duration
+        });
+      }
+      
+      async processWithWebGL2(videoFrame, width, height) {
+        // Set canvas size
+        this.inputCanvas.width = width;
+        this.inputCanvas.height = height;
+        this.outputCanvas.width = width;
+        this.outputCanvas.height = height;
+        
+        // Draw VideoFrame to input canvas using 2D context
+        const inputCtx = this.inputCanvas.getContext('2d');
+        inputCtx.drawImage(videoFrame, 0, 0, width, height);
+        
+        // Upload to WebGL2 texture using texImage2D
+        this.gl.bindTexture(this.gl.TEXTURE_2D, this.inputTexture2D);
+        this.gl.texImage2D(
+          this.gl.TEXTURE_2D, 0, this.gl.RGBA, 
+          this.gl.RGBA, this.gl.UNSIGNED_BYTE, this.inputCanvas
+        );
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.LINEAR);
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
+        
+        // Optional: Perform readback and scale-down
+        if (this.enableReadback) {
+          await this.performWebGL2Readback(width, height);
+        }
+        
+        // Render back to output canvas for display
+        this.gl.viewport(0, 0, width, height);
+        this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
+        this.gl.useProgram(this.scalingProgram);
+        this.gl.bindVertexArray(this.vao);
+        this.gl.bindTexture(this.gl.TEXTURE_2D, this.inputTexture2D);
+        this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
+        
+        // Create output VideoFrame from canvas
+        return new VideoFrame(this.outputCanvas, {
+          timestamp: videoFrame.timestamp,
+          duration: videoFrame.duration
+        });
+      }
+      
+      async performWebGL2Readback(width, height) {
+        try {
+          const scaledWidth = 255;
+          const scaledHeight = 144;
+          
+          // Set up scaled texture
+          this.gl.bindTexture(this.gl.TEXTURE_2D, this.scaledTexture2D);
+          this.gl.texImage2D(
+            this.gl.TEXTURE_2D, 0, this.gl.RGBA,
+            scaledWidth, scaledHeight, 0,
+            this.gl.RGBA, this.gl.UNSIGNED_BYTE, null
+          );
+          this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
+          this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.LINEAR);
+          this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
+          this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
+          
+          // Set up framebuffer for scaled rendering
+          this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, this.framebuffer);
+          this.gl.framebufferTexture2D(
+            this.gl.FRAMEBUFFER, this.gl.COLOR_ATTACHMENT0,
+            this.gl.TEXTURE_2D, this.scaledTexture2D, 0
+          );
+          
+          // Render scaled-down version
+          this.gl.viewport(0, 0, scaledWidth, scaledHeight);
+          this.gl.useProgram(this.scalingProgram);
+          this.gl.bindVertexArray(this.vao);
+          this.gl.bindTexture(this.gl.TEXTURE_2D, this.inputTexture2D);
+          this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
+          
+          // Read back pixels
+          this.gl.readPixels(
+            0, 0, scaledWidth, scaledHeight,
+            this.gl.RGBA, this.gl.UNSIGNED_BYTE, this.readbackPixels
+          );
+          
+          this.readbackCount++;
+          
+        } catch (error) {
+          console.warn('WebGL2 readback failed:', error);
+        }
+      }
+      
+      async performWebGPUReadback(width, height) {
         try {
           const commandEncoder = this.device.createCommandEncoder();
           
@@ -651,9 +862,6 @@
             }
           }
           
-          // Always update readback data when readback is enabled, display will show/hide based on checkbox
-          this.displayReadbackData(finalData, scaledWidth, scaledHeight);
-          
           this.outputBuffer.unmap();
           this.readbackCount++;
           
@@ -662,31 +870,19 @@
         }
       }
       
-      displayReadbackData(data, width, height) {
-        try {
-          // Always update the canvas data, regardless of visibility
-          const ctx = this.readbackCanvas.getContext('2d');
-          const imageData = ctx.createImageData(width, height);
-          
-          // Copy the readback data to ImageData
-          for (let i = 0; i < data.length && i < imageData.data.length; i++) {
-            imageData.data[i] = data[i];
-          }
-          
-          // Draw the image data to the canvas (this will be shown when visible)
-          ctx.putImageData(imageData, 0, 0);
-          
-        } catch (error) {
-          console.warn('Failed to display readback data:', error);
-        }
-      }
-      
       async start() {
         this.updateStatus('Initializing...', 'info');
         this.startBtn.disabled = true;
         
-        // Initialize WebGPU
-        if (!await this.initializeWebGPU()) {
+        // Initialize GPU backend
+        let initSuccess = false;
+        if (this.useWebGL2) {
+          initSuccess = this.initializeWebGL2();
+        } else {
+          initSuccess = await this.initializeWebGPU();
+        }
+        
+        if (!initSuccess) {
           this.startBtn.disabled = false;
           return;
         }
@@ -702,6 +898,9 @@
           this.startBtn.disabled = false;
           return;
         }
+        
+        // Update GPU backend display
+        this.updateGpuBackendDisplay();
         
         // Start processing
         this.isProcessing = true;
@@ -747,24 +946,44 @@
         this.outputStream = null;
         
         // Clean up GPU resources
-        if (this.inputTexture) {
-          this.inputTexture.destroy();
-          this.inputTexture = null;
-        }
-        
-        if (this.scaledTexture) {
-          this.scaledTexture.destroy();
-          this.scaledTexture = null;
-        }
-        
-        if (this.outputBuffer) {
-          this.outputBuffer.destroy();
-          this.outputBuffer = null;
-        }
-        
-        if (this.stagingBuffer) {
-          this.stagingBuffer.destroy();
-          this.stagingBuffer = null;
+        if (this.useWebGL2) {
+          // Clean up WebGL2 resources
+          if (this.gl) {
+            if (this.inputTexture2D) this.gl.deleteTexture(this.inputTexture2D);
+            if (this.scaledTexture2D) this.gl.deleteTexture(this.scaledTexture2D);
+            if (this.framebuffer) this.gl.deleteFramebuffer(this.framebuffer);
+            if (this.scalingProgram) this.gl.deleteProgram(this.scalingProgram);
+            if (this.vao) this.gl.deleteVertexArray(this.vao);
+          }
+          this.gl = null;
+          this.inputCanvas = null;
+          this.outputCanvas = null;
+          this.inputTexture2D = null;
+          this.scaledTexture2D = null;
+          this.framebuffer = null;
+          this.scalingProgram = null;
+          this.readbackPixels = null;
+        } else {
+          // Clean up WebGPU resources
+          if (this.inputTexture) {
+            this.inputTexture.destroy();
+            this.inputTexture = null;
+          }
+          
+          if (this.scaledTexture) {
+            this.scaledTexture.destroy();
+            this.scaledTexture = null;
+          }
+          
+          if (this.outputBuffer) {
+            this.outputBuffer.destroy();
+            this.outputBuffer = null;
+          }
+          
+          if (this.stagingBuffer) {
+            this.stagingBuffer.destroy();
+            this.stagingBuffer = null;
+          }
         }
         
         // Reset UI
@@ -777,6 +996,7 @@
         this.readbackFpsSpan.textContent = '--';
         this.inputResolutionSpan.textContent = '--';
         this.outputResolutionSpan.textContent = '--';
+        this.gpuBackendSpan.textContent = '--';
         this.frameCount = 0;
         this.readbackCount = 0;
       }
@@ -787,9 +1007,9 @@
     
     // Check WebGPU support on page load
     if (!navigator.gpu) {
-      document.getElementById('status').textContent = 'WebGPU is not supported in this browser';
-      document.getElementById('status').className = 'status error';
-      document.getElementById('startBtn').disabled = true;
+      document.getElementById('status').textContent = 'WebGPU is not supported in this browser (WebGL2 still available)';
+      document.getElementById('status').className = 'status info';
+      // Don't disable the start button - WebGL2 might still work
     }
   </script>
 </body>
