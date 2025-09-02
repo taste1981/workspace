@@ -156,6 +156,20 @@
       
       <div class="checkbox-container">
         <label>
+          <input type="checkbox" id="enableEncoding" />
+          Enable H.264 Encoding (720p30fps using WebCodecs)
+        </label>
+      </div>
+      
+      <div class="checkbox-container">
+        <label>
+          <input type="checkbox" id="enableDecoding" />
+          Enable H.264 Decoding (decode encoded stream back to video for quality comparison)
+        </label>
+      </div>
+      
+      <div class="checkbox-container">
+        <label>
           <input type="checkbox" id="useWebGL2" />
           Use WebGL2 Implementation (instead of WebGPU for processing and readback)
         </label>
@@ -182,6 +196,14 @@
           <div class="stat-value" id="readbackFps">--</div>
         </div>
         <div class="stat-item">
+          <div class="stat-label">Encoding FPS</div>
+          <div class="stat-value" id="encodingFps">--</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Decoding FPS</div>
+          <div class="stat-value" id="decodingFps">--</div>
+        </div>
+        <div class="stat-item">
           <div class="stat-label">Input Resolution</div>
           <div class="stat-value" id="inputResolution">--</div>
         </div>
@@ -192,6 +214,14 @@
         <div class="stat-item">
           <div class="stat-label">GPU Backend</div>
           <div class="stat-value" id="gpuBackend">--</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Encoding Queue</div>
+          <div class="stat-value" id="encodingQueue">--</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Decoding Queue</div>
+          <div class="stat-value" id="decodingQueue">--</div>
         </div>
       </div>
     </div>
@@ -205,6 +235,11 @@
       <div class="video-section">
         <h3>Output Video (WebGPU Processed)</h3>
         <video id="outputVideo" autoplay playsinline muted></video>
+      </div>
+      
+      <div class="video-section" id="decodedVideoSection" style="display: none;">
+        <h3>Decoded Video (H.264 Encode/Decode)</h3>
+        <video id="decodedVideo" autoplay playsinline muted></video>
       </div>
     </div>
   </div>
@@ -222,12 +257,19 @@
         this.isProcessing = false;
         this.enableReadback = false;
         this.useWebGL2 = false;
+        this.enableEncoding = false;
+        this.enableDecoding = false;
+        this.forceNextKeyframe = false;
         
         // Performance tracking
         this.frameCount = 0;
         this.readbackCount = 0;
+        this.encodingFrameCount = 0;
+        this.decodingFrameCount = 0;
         this.lastFpsTime = performance.now();
         this.lastReadbackTime = performance.now();
+        this.lastEncodingFpsTime = performance.now();
+        this.lastDecodingFpsTime = performance.now();
         
         // WebGPU resources
         this.inputTexture = null;
@@ -245,21 +287,40 @@
         this.framebuffer = null;
         this.readbackPixels = null;
         
+        // Encoding components
+        this.encodingTrackProcessor = null;
+        this.encodingReader = null;
+        this.encoder = null;
+        
+        // Decoding components
+        this.decoder = null;
+        this.decodedTrackGenerator = null;
+        this.decodedWriter = null;
+        this.decodedStream = null;
+        
         // DOM elements
         this.startBtn = document.getElementById('startBtn');
         this.stopBtn = document.getElementById('stopBtn');
         this.enableReadbackCheckbox = document.getElementById('enableReadback');
+        this.enableEncodingCheckbox = document.getElementById('enableEncoding');
+        this.enableDecodingCheckbox = document.getElementById('enableDecoding');
         this.useWebGL2Checkbox = document.getElementById('useWebGL2');
         this.showInputVideoCheckbox = document.getElementById('showInputVideo');
         this.statusDiv = document.getElementById('status');
         this.inputVideo = document.getElementById('inputVideo');
         this.outputVideo = document.getElementById('outputVideo');
+        this.decodedVideo = document.getElementById('decodedVideo');
         this.inputVideoSection = document.getElementById('inputVideoSection');
+        this.decodedVideoSection = document.getElementById('decodedVideoSection');
         this.processingFpsSpan = document.getElementById('processingFps');
         this.readbackFpsSpan = document.getElementById('readbackFps');
+        this.encodingFpsSpan = document.getElementById('encodingFps');
+        this.decodingFpsSpan = document.getElementById('decodingFps');
         this.inputResolutionSpan = document.getElementById('inputResolution');
         this.outputResolutionSpan = document.getElementById('outputResolution');
         this.gpuBackendSpan = document.getElementById('gpuBackend');
+        this.encodingQueueSpan = document.getElementById('encodingQueue');
+        this.decodingQueueSpan = document.getElementById('decodingQueue');
         
         this.bindEvents();
       }
@@ -269,6 +330,30 @@
         this.stopBtn.addEventListener('click', () => this.stop());
         this.enableReadbackCheckbox.addEventListener('change', (e) => {
           this.enableReadback = e.target.checked;
+        });
+        this.enableEncodingCheckbox.addEventListener('change', (e) => {
+          this.enableEncoding = e.target.checked;
+          // If encoding is enabled during runtime, initialize it
+          if (this.enableEncoding && this.isProcessing && this.outputStream) {
+            setTimeout(() => {
+              this.initializeEncoding();
+            }, 100);
+          }
+        });
+        this.enableDecodingCheckbox.addEventListener('change', (e) => {
+          this.enableDecoding = e.target.checked;
+          this.decodedVideoSection.style.display = e.target.checked ? 'block' : 'none';
+          // If decoding is enabled during runtime, initialize it
+          if (this.enableDecoding && this.isProcessing) {
+            this.initializeDecoding();
+            // Force a keyframe from the encoder since decoder needs to start with one
+            if (this.encoder) {
+              this.encoder.flush().then(() => {
+                // Request a keyframe on the next encode
+                this.forceNextKeyframe = true;
+              }).catch(console.warn);
+            }
+          }
         });
         this.useWebGL2Checkbox.addEventListener('change', (e) => {
           this.useWebGL2 = e.target.checked;
@@ -305,6 +390,36 @@
           this.readbackFpsSpan.textContent = this.enableReadback ? readbackFps : '--';
           this.readbackCount = 0;
           this.lastReadbackTime = now;
+        }
+        
+        const encodingDelta = now - this.lastEncodingFpsTime;
+        if (encodingDelta >= 1000) {
+          const encodingFps = (this.encodingFrameCount * 1000 / encodingDelta).toFixed(1);
+          this.encodingFpsSpan.textContent = this.enableEncoding ? encodingFps : '--';
+          this.encodingFrameCount = 0;
+          this.lastEncodingFpsTime = now;
+        }
+        
+        const decodingDelta = now - this.lastDecodingFpsTime;
+        if (decodingDelta >= 1000) {
+          const decodingFps = (this.decodingFrameCount * 1000 / decodingDelta).toFixed(1);
+          this.decodingFpsSpan.textContent = this.enableDecoding ? decodingFps : '--';
+          this.decodingFrameCount = 0;
+          this.lastDecodingFpsTime = now;
+        }
+        
+        // Update encoding queue size
+        if (this.encoder) {
+          this.encodingQueueSpan.textContent = this.encoder.encodeQueueSize;
+        } else {
+          this.encodingQueueSpan.textContent = '--';
+        }
+        
+        // Update decoding queue size
+        if (this.decoder) {
+          this.decodingQueueSpan.textContent = this.decoder.decodeQueueSize;
+        } else {
+          this.decodingQueueSpan.textContent = '--';
         }
       }
       
@@ -558,6 +673,186 @@
           this.updateStatus(`MediaStream processing setup failed: ${error.message}`, 'error');
           return false;
         }
+      }
+      
+      initializeEncoding() {
+        if (!this.enableEncoding || !this.outputStream) {
+          return true;
+        }
+        
+        try {
+          // Create MediaStreamTrackProcessor for encoding from the WebGPU/WebGL2 output stream
+          const videoTrack = this.outputStream.getVideoTracks()[0];
+          if (!videoTrack) {
+            console.error('No output video track found for encoding');
+            throw new Error('No output video track found for encoding');
+          }
+          
+          console.log('Setting up encoding with video track:', videoTrack);
+          
+          this.encodingTrackProcessor = new MediaStreamTrackProcessor({ track: videoTrack });
+          this.encodingReader = this.encodingTrackProcessor.readable.getReader();
+          
+          // Initialize H.264 encoder
+          this.initializeH264Encoder();
+          
+          // Start encoding loop
+          this.processEncodingFrame();
+          
+          // Force the first frame to be a keyframe
+          this.forceNextKeyframe = true;
+          
+          // Initialize decoding if enabled
+          if (this.enableDecoding) {
+            this.initializeDecoding();
+          }
+          
+          return true;
+        } catch (error) {
+          console.error('Encoding setup failed:', error);
+          this.updateStatus(`Encoding setup failed: ${error.message}`, 'error');
+          return false;
+        }
+      }
+      
+      initializeH264Encoder() {
+        const config = {
+          codec: 'avc1.42E01F', // H.264 Baseline Profile, Level 3.1
+          width: 1280,
+          height: 720,
+          bitrate: 2000000, // 2 Mbps
+          framerate: 30,
+          bitrateMode: 'constant',
+          avc: { format: 'annexb' }
+        };
+        
+        this.encoder = new VideoEncoder({
+          output: (chunk, metadata) => {
+            // If decoding is enabled, pass the chunk directly to the decoder
+            if (this.enableDecoding && this.decoder) {
+              try {
+                this.decoder.decode(chunk);
+              } catch (error) {
+                console.error('Decoding error:', error);
+              }
+            }
+            // Here you could also save the chunk to a file or stream it
+          },
+          error: (error) => {
+            console.error('H.264 encoding error:', error);
+          }
+        });
+        
+        this.encoder.configure(config);
+      }
+      
+      async processEncodingFrame() {
+        if (!this.isProcessing || !this.enableEncoding || !this.encodingReader) {
+          return;
+        }
+        
+        try {
+          const readResult = await this.encodingReader.read();
+          if (readResult.done) {
+            return;
+          }
+          
+          if (!readResult.value) {
+            setTimeout(() => this.processEncodingFrame(), 16);
+            return;
+          }
+          
+          const videoFrame = readResult.value;
+          
+          // Ensure proper timestamp and duration
+          const timestamp = videoFrame.timestamp || (performance.now() * 1000);
+          const duration = videoFrame.duration || (1000000 / 30); // 30fps default
+          
+          // Create a new VideoFrame with proper timing
+          const frameForEncoding = new VideoFrame(videoFrame, {
+            timestamp: timestamp,
+            duration: duration
+          });
+          
+          // Encode frame (only if queue is not too full)
+          if (this.encoder.encodeQueueSize < 5) {
+            // Check if we need to force a keyframe
+            const keyFrame = this.forceNextKeyframe;
+            if (this.forceNextKeyframe) {
+              this.forceNextKeyframe = false; // Reset the flag
+            }
+            
+            this.encoder.encode(frameForEncoding, { keyFrame });
+            this.encodingFrameCount++;
+          } else {
+            console.warn('H.264 encoder queue full, dropping frame');
+          }
+          
+          // Clean up
+          videoFrame.close();
+          frameForEncoding.close();
+          
+          // Continue processing
+          this.processEncodingFrame();
+          
+        } catch (error) {
+          console.error('Error in H.264 encoding loop:', error);
+          if (this.isProcessing) {
+            setTimeout(() => this.processEncodingFrame(), 100);
+          }
+        }
+      }
+      
+      initializeDecoding() {
+        if (!this.enableDecoding) {
+          return true;
+        }
+        
+        try {
+          // Create MediaStreamTrackGenerator for decoded video output
+          this.decodedTrackGenerator = new MediaStreamTrackGenerator({ kind: 'video' });
+          this.decodedWriter = this.decodedTrackGenerator.writable.getWriter();
+          this.decodedStream = new MediaStream([this.decodedTrackGenerator]);
+          
+          // Set decoded video source
+          this.decodedVideo.srcObject = this.decodedStream;
+          
+          // Initialize H.264 decoder
+          this.initializeH264Decoder();
+          
+          return true;
+        } catch (error) {
+          console.error('Decoding setup failed:', error);
+          this.updateStatus(`Decoding setup failed: ${error.message}`, 'error');
+          return false;
+        }
+      }
+      
+      initializeH264Decoder() {
+        const config = {
+          codec: 'avc1.42E01F', // H.264 Baseline Profile, Level 3.1
+        };
+        
+        this.decoder = new VideoDecoder({
+          output: async (videoFrame) => {
+            try {
+              // Write decoded frame to MediaStreamTrackGenerator
+              if (this.decodedWriter && this.enableDecoding) {
+                await this.decodedWriter.write(videoFrame);
+                this.decodingFrameCount++;
+              }
+              videoFrame.close();
+            } catch (error) {
+              console.warn('Decoded frame write failed:', error);
+              videoFrame.close();
+            }
+          },
+          error: (error) => {
+            console.error('H.264 decoding error:', error);
+          }
+        });
+        
+        this.decoder.configure(config);
       }
       
       createGPUBuffers(width, height) {
@@ -888,6 +1183,18 @@
         
         // Start the processing loop
         this.processVideoFrame();
+        
+        // Initialize encoding after a short delay to ensure output stream is ready
+        if (this.enableEncoding) {
+          setTimeout(() => {
+            this.initializeEncoding();
+          }, 1000);
+        }
+        
+        // Initialize decoding if enabled
+        if (this.enableDecoding) {
+          this.initializeDecoding();
+        }
       }
       
       stop() {
@@ -905,8 +1212,43 @@
           this.writer = null;
         }
         
+        // Clean up encoding
+        if (this.encodingReader) {
+          this.encodingReader.cancel().catch(console.warn);
+          this.encodingReader = null;
+        }
+        
+        if (this.encoder) {
+          this.encoder.flush().catch(console.warn);
+          this.encoder.close();
+          this.encoder = null;
+        }
+        
+        // Clean up decoding
+        if (this.decodedWriter) {
+          this.decodedWriter.close().catch(console.warn);
+          this.decodedWriter = null;
+        }
+        
+        if (this.decoder) {
+          this.decoder.flush().catch(console.warn);
+          this.decoder.close();
+          this.decoder = null;
+        }
+        
+        // Clean up encoded chunks
+        // No longer needed since we're not storing chunks
+        
         if (this.trackProcessor) {
           this.trackProcessor = null;
+        }
+        
+        if (this.encodingTrackProcessor) {
+          this.encodingTrackProcessor = null;
+        }
+        
+        if (this.decodedTrackGenerator) {
+          this.decodedTrackGenerator = null;
         }
         
         if (this.trackGenerator) {
@@ -922,7 +1264,9 @@
         // Clear video sources
         this.inputVideo.srcObject = null;
         this.outputVideo.srcObject = null;
+        this.decodedVideo.srcObject = null;
         this.outputStream = null;
+        this.decodedStream = null;
         
         // Clean up GPU resources
         if (this.useWebGL2) {
@@ -972,11 +1316,17 @@
         // Reset stats
         this.processingFpsSpan.textContent = '--';
         this.readbackFpsSpan.textContent = '--';
+        this.encodingFpsSpan.textContent = '--';
+        this.decodingFpsSpan.textContent = '--';
         this.inputResolutionSpan.textContent = '--';
         this.outputResolutionSpan.textContent = '--';
         this.gpuBackendSpan.textContent = '--';
+        this.encodingQueueSpan.textContent = '--';
+        this.decodingQueueSpan.textContent = '--';
         this.frameCount = 0;
         this.readbackCount = 0;
+        this.encodingFrameCount = 0;
+        this.decodingFrameCount = 0;
       }
     }
     
