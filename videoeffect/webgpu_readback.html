@@ -257,6 +257,7 @@
         <h3>WebRTC Video (Loopback Peer Connection)</h3>
         <video id="webrtcVideo" autoplay playsinline muted></video>
       </div>
+      </div>
     </div>
   </div>
 
@@ -295,7 +296,9 @@
         this.scaledTexture = null;
         this.outputBuffer = null;
         this.stagingBuffer = null;
-        this.scalingPipeline = null;
+        this.scalingComputePipeline = null;
+        this.scalingBindGroupLayout = null;
+        this.parametersBuffer = null;
         
         // WebGL2 resources
         this.gl = null;
@@ -512,8 +515,8 @@
           
           this.device = await adapter.requestDevice();
           
-          // Create scaling pipeline for readback
-          this.createScalingPipeline();
+          // Create scaling compute pipeline for readback
+          this.createScalingComputePipeline();
           
           return true;
         } catch (error) {
@@ -658,70 +661,83 @@
         }
       }
       
-      createScalingPipeline() {
-        // Create a render pipeline for scaling down textures
-        const vertexShader = this.device.createShaderModule({
+      createScalingComputePipeline() {
+        // Create compute shader for scaling down textures
+        const computeShader = this.device.createShaderModule({
           code: `
-            struct VertexOutput {
-              @builtin(position) position: vec4<f32>,
-              @location(0) uv: vec2<f32>,
-            }
-            
-            @vertex
-            fn main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
-              var pos = array<vec2<f32>, 6>(
-                vec2<f32>(-1.0, -1.0),
-                vec2<f32>( 1.0, -1.0),
-                vec2<f32>(-1.0,  1.0),
-                vec2<f32>( 1.0, -1.0),
-                vec2<f32>( 1.0,  1.0),
-                vec2<f32>(-1.0,  1.0)
-              );
-              var uv = array<vec2<f32>, 6>(
-                vec2<f32>(0.0, 1.0),
-                vec2<f32>(1.0, 1.0),
-                vec2<f32>(0.0, 0.0),
-                vec2<f32>(1.0, 1.0),
-                vec2<f32>(1.0, 0.0),
-                vec2<f32>(0.0, 0.0)
-              );
-              
-              var output: VertexOutput;
-              output.position = vec4<f32>(pos[vertexIndex], 0.0, 1.0);
-              output.uv = uv[vertexIndex];
-              return output;
+            struct Parameters {
+              output_size : vec2<u32>,
+            };
+
+            @group(0) @binding(0) var input : texture_2d<f32>;
+            @group(0) @binding(1) var output : texture_storage_2d<rgba8unorm, write>;
+            @group(0) @binding(2) var<uniform> params : Parameters;
+            @group(0) @binding(3) var linear_sampler : sampler;
+
+            @compute @workgroup_size(8, 8)
+            fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
+              if (gid.x >= params.output_size.x || gid.y >= params.output_size.y) {
+                return;
+              }
+              // Map output pixel to input texture coordinates [0,1]
+              let output_coord = vec2<f32>(gid.xy) + vec2<f32>(0.5, 0.5);
+              let input_coord = output_coord / vec2<f32>(params.output_size);
+              let input_value = textureSampleLevel(input, linear_sampler, input_coord, 0);
+              textureStore(output, vec2<i32>(gid.xy), input_value);
             }
           `
         });
         
-        const fragmentShader = this.device.createShaderModule({
-          code: `
-            @group(0) @binding(0) var inputTexture: texture_2d<f32>;
-            @group(0) @binding(1) var textureSampler: sampler;
-            
-            @fragment
-            fn main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
-              return textureSample(inputTexture, textureSampler, uv);
-            }
-          `
+        // Create bind group layout
+        this.scalingBindGroupLayout = this.device.createBindGroupLayout({
+          entries: [
+            {
+              binding: 0,
+              visibility: GPUShaderStage.COMPUTE,
+              texture: {
+                sampleType: 'float',
+                viewDimension: '2d',
+              },
+            },
+            {
+              binding: 1,
+              visibility: GPUShaderStage.COMPUTE,
+              storageTexture: {
+                access: 'write-only',
+                format: 'rgba8unorm',
+                viewDimension: '2d',
+              },
+            },
+            {
+              binding: 2,
+              visibility: GPUShaderStage.COMPUTE,
+              buffer: {
+                type: 'uniform',
+              },
+            },
+            {
+              binding: 3,
+              visibility: GPUShaderStage.COMPUTE,
+              sampler: {},
+            },
+          ],
         });
         
-        this.scalingPipeline = this.device.createRenderPipeline({
-          layout: 'auto',
-          vertex: {
-            module: vertexShader,
+        // Create compute pipeline
+        this.scalingComputePipeline = this.device.createComputePipeline({
+          layout: this.device.createPipelineLayout({
+            bindGroupLayouts: [this.scalingBindGroupLayout],
+          }),
+          compute: {
+            module: computeShader,
             entryPoint: 'main',
           },
-          fragment: {
-            module: fragmentShader,
-            entryPoint: 'main',
-            targets: [{
-              format: 'rgba8unorm',
-            }],
-          },
-          primitive: {
-            topology: 'triangle-list',
-          },
+        });
+        
+        // Create parameters buffer
+        this.parametersBuffer = this.device.createBuffer({
+          size: 8, // vec2<u32> = 8 bytes
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
       }
       
@@ -1137,7 +1153,7 @@
         this.scaledTexture = this.device.createTexture({
           size: [scaledWidth, scaledHeight, 1],
           format: 'rgba8unorm',
-          usage: GPUTextureUsage.RENDER_ATTACHMENT | 
+          usage: GPUTextureUsage.STORAGE_BINDING | 
                  GPUTextureUsage.COPY_SRC |
                  GPUTextureUsage.TEXTURE_BINDING,
         });
@@ -1339,9 +1355,17 @@
         try {
           const commandEncoder = this.device.createCommandEncoder();
           
-          // First, scale down the input texture to 255x144 using render pipeline
+          // Scale down the input texture to 255x144 using compute pipeline
           const scaledWidth = 255;
           const scaledHeight = 144;
+
+          // Update parameters buffer with output size only
+          const parametersData = new ArrayBuffer(8);
+          const parametersView = new DataView(parametersData);
+          parametersView.setUint32(0, scaledWidth, true);  // output_size.x
+          parametersView.setUint32(4, scaledHeight, true); // output_size.y
+          
+          this.device.queue.writeBuffer(this.parametersBuffer, 0, parametersData);
 
           // Create sampler for texture sampling
           const sampler = this.device.createSampler({
@@ -1349,9 +1373,9 @@
             minFilter: 'linear',
           });
           
-          // Create bind group for scaling operation
+          // Create bind group for compute operation
           const bindGroup = this.device.createBindGroup({
-            layout: this.scalingPipeline.getBindGroupLayout(0),
+            layout: this.scalingBindGroupLayout,
             entries: [
               {
                 binding: 0,
@@ -1359,25 +1383,29 @@
               },
               {
                 binding: 1,
+                resource: this.scaledTexture.createView(),
+              },
+              {
+                binding: 2,
+                resource: { buffer: this.parametersBuffer },
+              },
+              {
+                binding: 3,
                 resource: sampler,
               },
             ],
           });
           
-          // Render to scaled texture
-          const renderPass = commandEncoder.beginRenderPass({
-            colorAttachments: [{
-              view: this.scaledTexture.createView(),
-              clearValue: { r: 0, g: 0, b: 0, a: 1 },
-              loadOp: 'clear',
-              storeOp: 'store',
-            }],
-          });
+          // Dispatch compute shader
+          const computePass = commandEncoder.beginComputePass();
+          computePass.setPipeline(this.scalingComputePipeline);
+          computePass.setBindGroup(0, bindGroup);
           
-          renderPass.setPipeline(this.scalingPipeline);
-          renderPass.setBindGroup(0, bindGroup);
-          renderPass.draw(6); // Draw fullscreen quad
-          renderPass.end();
+          // Calculate dispatch size (workgroup size is 8x8)
+          const dispatchX = Math.ceil(scaledWidth / 8);
+          const dispatchY = Math.ceil(scaledHeight / 8);
+          computePass.dispatchWorkgroups(dispatchX, dispatchY);
+          computePass.end();
           
           // Copy scaled texture to buffer
           const bytesPerRow = scaledWidth * 4; // RGBA
@@ -1401,17 +1429,18 @@
           // Wait for GPU operations to complete
           await this.device.queue.onSubmittedWorkDone();
           
-          // Map and read buffer data
+          // Map and read buffer data for readback
           await this.outputBuffer.mapAsync(GPUMapMode.READ);
           const arrayBuffer = this.outputBuffer.getMappedRange();
-
           this.outputBuffer.unmap();
+          
           this.readbackCount++;
           
         } catch (error) {
           console.warn('Readback failed:', error);
         }
       }
+      
       
       async start() {
         this.updateStatus('Initializing...', 'info');
@@ -1603,6 +1632,11 @@
           if (this.stagingBuffer) {
             this.stagingBuffer.destroy();
             this.stagingBuffer = null;
+          }
+          
+          if (this.parametersBuffer) {
+            this.parametersBuffer.destroy();
+            this.parametersBuffer = null;
           }
         }
         
