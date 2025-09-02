@@ -139,7 +139,7 @@
 <body>
   <div class="container">
     <h1>WebGPU Video Processor</h1>
-    <p>Demonstrates MediaStreamTrackProcessor → WebGPU → MediaStreamTrackGenerator pipeline with optional GPU readback.</p>
+    <p>Demonstrates MediaStreamTrackProcessor → WebGPU/WebGL2 → MediaStreamTrackGenerator pipeline with optional GPU readback and encoding via WebCodecs or WebRTC.</p>
 
     <div class="control-panel">
       <h2>Controls</h2>
@@ -157,14 +157,21 @@
       <div class="checkbox-container">
         <label>
           <input type="checkbox" id="enableEncoding" />
-          Enable H.264 Encoding (720p30fps using WebCodecs)
+          Enable WebCodecs H.264 Encoding (720p30fps)
         </label>
       </div>
       
       <div class="checkbox-container">
         <label>
           <input type="checkbox" id="enableDecoding" />
-          Enable H.264 Decoding (decode encoded stream back to video for quality comparison)
+          Enable WebCodecs H.264 Decoding (decode encoded stream back to video for quality comparison)
+        </label>
+      </div>
+      
+      <div class="checkbox-container">
+        <label>
+          <input type="checkbox" id="enableWebRTC" />
+          Enable WebRTC H.264 Pipeline (loopback peer connection - alternative to WebCodecs)
         </label>
       </div>
       
@@ -204,6 +211,10 @@
           <div class="stat-value" id="decodingFps">--</div>
         </div>
         <div class="stat-item">
+          <div class="stat-label">WebRTC FPS</div>
+          <div class="stat-value" id="webrtcFps">--</div>
+        </div>
+        <div class="stat-item">
           <div class="stat-label">Input Resolution</div>
           <div class="stat-value" id="inputResolution">--</div>
         </div>
@@ -241,6 +252,11 @@
         <h3>Decoded Video (H.264 Encode/Decode)</h3>
         <video id="decodedVideo" autoplay playsinline muted></video>
       </div>
+      
+      <div class="video-section" id="webrtcVideoSection" style="display: none;">
+        <h3>WebRTC Video (Loopback Peer Connection)</h3>
+        <video id="webrtcVideo" autoplay playsinline muted></video>
+      </div>
     </div>
   </div>
 
@@ -259,6 +275,7 @@
         this.useWebGL2 = false;
         this.enableEncoding = false;
         this.enableDecoding = false;
+        this.enableWebRTC = false;
         this.forceNextKeyframe = false;
         
         // Performance tracking
@@ -266,10 +283,12 @@
         this.readbackCount = 0;
         this.encodingFrameCount = 0;
         this.decodingFrameCount = 0;
+        this.webrtcFrameCount = 0;
         this.lastFpsTime = performance.now();
         this.lastReadbackTime = performance.now();
         this.lastEncodingFpsTime = performance.now();
         this.lastDecodingFpsTime = performance.now();
+        this.lastWebRTCFpsTime = performance.now();
         
         // WebGPU resources
         this.inputTexture = null;
@@ -298,24 +317,35 @@
         this.decodedWriter = null;
         this.decodedStream = null;
         
+        // WebRTC components
+        this.senderPC = null;
+        this.receiverPC = null;
+        this.webrtcStream = null;
+        this.webrtcStatsInterval = null;
+        this.lastWebRTCFramesDecoded = 0;
+        
         // DOM elements
         this.startBtn = document.getElementById('startBtn');
         this.stopBtn = document.getElementById('stopBtn');
         this.enableReadbackCheckbox = document.getElementById('enableReadback');
         this.enableEncodingCheckbox = document.getElementById('enableEncoding');
         this.enableDecodingCheckbox = document.getElementById('enableDecoding');
+        this.enableWebRTCCheckbox = document.getElementById('enableWebRTC');
         this.useWebGL2Checkbox = document.getElementById('useWebGL2');
         this.showInputVideoCheckbox = document.getElementById('showInputVideo');
         this.statusDiv = document.getElementById('status');
         this.inputVideo = document.getElementById('inputVideo');
         this.outputVideo = document.getElementById('outputVideo');
         this.decodedVideo = document.getElementById('decodedVideo');
+        this.webrtcVideo = document.getElementById('webrtcVideo');
         this.inputVideoSection = document.getElementById('inputVideoSection');
         this.decodedVideoSection = document.getElementById('decodedVideoSection');
+        this.webrtcVideoSection = document.getElementById('webrtcVideoSection');
         this.processingFpsSpan = document.getElementById('processingFps');
         this.readbackFpsSpan = document.getElementById('readbackFps');
         this.encodingFpsSpan = document.getElementById('encodingFps');
         this.decodingFpsSpan = document.getElementById('decodingFps');
+        this.webrtcFpsSpan = document.getElementById('webrtcFps');
         this.inputResolutionSpan = document.getElementById('inputResolution');
         this.outputResolutionSpan = document.getElementById('outputResolution');
         this.gpuBackendSpan = document.getElementById('gpuBackend');
@@ -333,6 +363,14 @@
         });
         this.enableEncodingCheckbox.addEventListener('change', (e) => {
           this.enableEncoding = e.target.checked;
+          
+          // If WebCodecs encoding is enabled, disable WebRTC
+          if (this.enableEncoding) {
+            this.enableWebRTCCheckbox.checked = false;
+            this.enableWebRTC = false;
+            this.webrtcVideoSection.style.display = 'none';
+          }
+          
           // If encoding is enabled during runtime, initialize it
           if (this.enableEncoding && this.isProcessing && this.outputStream) {
             setTimeout(() => {
@@ -343,6 +381,14 @@
         this.enableDecodingCheckbox.addEventListener('change', (e) => {
           this.enableDecoding = e.target.checked;
           this.decodedVideoSection.style.display = e.target.checked ? 'block' : 'none';
+          
+          // If WebCodecs decoding is enabled, disable WebRTC
+          if (this.enableDecoding) {
+            this.enableWebRTCCheckbox.checked = false;
+            this.enableWebRTC = false;
+            this.webrtcVideoSection.style.display = 'none';
+          }
+          
           // If decoding is enabled during runtime, initialize it
           if (this.enableDecoding && this.isProcessing) {
             this.initializeDecoding();
@@ -353,6 +399,26 @@
                 this.forceNextKeyframe = true;
               }).catch(console.warn);
             }
+          }
+        });
+        this.enableWebRTCCheckbox.addEventListener('change', (e) => {
+          this.enableWebRTC = e.target.checked;
+          this.webrtcVideoSection.style.display = e.target.checked ? 'block' : 'none';
+          
+          // If WebRTC is enabled, disable WebCodecs options
+          if (this.enableWebRTC) {
+            this.enableEncodingCheckbox.checked = false;
+            this.enableDecodingCheckbox.checked = false;
+            this.enableEncoding = false;
+            this.enableDecoding = false;
+            this.decodedVideoSection.style.display = 'none';
+          }
+          
+          // If WebRTC is enabled during runtime, initialize it
+          if (this.enableWebRTC && this.isProcessing && this.outputStream) {
+            setTimeout(() => {
+              this.initializeWebRTC();
+            }, 100);
           }
         });
         this.useWebGL2Checkbox.addEventListener('change', (e) => {
@@ -406,6 +472,16 @@
           this.decodingFpsSpan.textContent = this.enableDecoding ? decodingFps : '--';
           this.decodingFrameCount = 0;
           this.lastDecodingFpsTime = now;
+        }
+        
+        const webrtcDelta = now - this.lastWebRTCFpsTime;
+        if (webrtcDelta >= 1000) {
+          // WebRTC FPS is now calculated from actual decoded frames stats
+          // webrtcFrameCount contains the actual FPS from WebRTC stats
+          const webrtcFps = this.enableWebRTC ? this.webrtcFrameCount.toFixed(1) : '--';
+          this.webrtcFpsSpan.textContent = webrtcFps;
+          // Reset for next measurement (stats monitoring updates this every second)
+          this.lastWebRTCFpsTime = now;
         }
         
         // Update encoding queue size
@@ -723,7 +799,7 @@
           bitrate: 2000000, // 2 Mbps
           framerate: 30,
           bitrateMode: 'constant',
-          hardwareAcceleration: 'prefer-hardware',
+          //hardwareAcceleration: 'prefer-hardware',
           avc: { format: 'annexb' }
         };
         
@@ -854,6 +930,198 @@
         });
         
         this.decoder.configure(config);
+      }
+      
+      async initializeWebRTC() {
+        if (!this.enableWebRTC || !this.outputStream) {
+          return true;
+        }
+        
+        try {
+          // Create sender peer connection
+          this.senderPC = new RTCPeerConnection({
+            iceServers: [] // No STUN/TURN needed for loopback
+          });
+          
+          // Create receiver peer connection  
+          this.receiverPC = new RTCPeerConnection({
+            iceServers: [] // No STUN/TURN needed for loopback
+          });
+          
+          // Add the output stream to sender
+          const videoTrack = this.outputStream.getVideoTracks()[0];
+          if (!videoTrack) {
+            throw new Error('No output video track found for WebRTC');
+          }
+          
+          this.senderPC.addTrack(videoTrack, this.outputStream);
+          
+          // Configure H.264 codec preference
+          const transceivers = this.senderPC.getTransceivers();
+          if (transceivers.length > 0) {
+            const sender = transceivers[0].sender;
+            const params = sender.getParameters();
+            
+            // Set H.264 codec preferences
+            if (params.codecs) {
+              // Filter and prioritize H.264 codecs
+              const h264Codecs = params.codecs.filter(codec => 
+                codec.mimeType.toLowerCase().includes('h264') || 
+                codec.mimeType.toLowerCase().includes('avc')
+              );
+              
+              if (h264Codecs.length > 0) {
+                params.codecs = h264Codecs;
+                await sender.setParameters(params);
+                console.log('H.264 codec forced for WebRTC sender');
+              }
+            }
+          }
+          
+          // Handle incoming stream on receiver
+          this.receiverPC.ontrack = (event) => {
+            console.log('WebRTC received track:', event.track);
+            this.webrtcStream = new MediaStream([event.track]);
+            
+            // Set WebRTC video source
+            this.webrtcVideo.srcObject = this.webrtcStream;
+            this.webrtcVideoSection.style.display = 'block';
+            
+            // Start WebRTC stats monitoring
+            this.startWebRTCStatsMonitoring();
+          };
+          
+          // Handle ICE candidates (for loopback, these should be local)
+          this.senderPC.onicecandidate = (event) => {
+            if (event.candidate) {
+              this.receiverPC.addIceCandidate(event.candidate).catch(console.warn);
+            }
+          };
+          
+          this.receiverPC.onicecandidate = (event) => {
+            if (event.candidate) {
+              this.senderPC.addIceCandidate(event.candidate).catch(console.warn);
+            }
+          };
+          
+          // Create offer/answer exchange with H.264 codec preference
+          const offer = await this.senderPC.createOffer();
+          
+          // Modify SDP to prioritize H.264
+          offer.sdp = this.prioritizeH264InSDP(offer.sdp);
+          
+          await this.senderPC.setLocalDescription(offer);
+          
+          await this.receiverPC.setRemoteDescription(offer);
+          const answer = await this.receiverPC.createAnswer();
+          
+          // Modify answer SDP to prioritize H.264
+          answer.sdp = this.prioritizeH264InSDP(answer.sdp);
+          
+          await this.receiverPC.setLocalDescription(answer);
+          
+          await this.senderPC.setRemoteDescription(answer);
+          
+          console.log('WebRTC loopback connection established');
+          
+          return true;
+        } catch (error) {
+          console.error('WebRTC setup failed:', error);
+          this.updateStatus(`WebRTC setup failed: ${error.message}`, 'error');
+          return false;
+        }
+      }
+      
+      prioritizeH264InSDP(sdp) {
+        // Split SDP into lines
+        const lines = sdp.split('\r\n');
+        let mLineIndex = -1;
+        
+        // Find the video media line
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].startsWith('m=video')) {
+            mLineIndex = i;
+            break;
+          }
+        }
+        
+        if (mLineIndex === -1) {
+          return sdp; // No video line found
+        }
+        
+        // Extract payload types from m-line
+        const mLine = lines[mLineIndex];
+        const payloadTypes = mLine.split(' ').slice(3);
+        
+        // Find H.264 payload types
+        const h264PayloadTypes = [];
+        const otherPayloadTypes = [];
+        
+        for (const pt of payloadTypes) {
+          // Look for corresponding rtpmap line
+          const rtpmapLine = lines.find(line => 
+            line.startsWith(`a=rtpmap:${pt}`) && 
+            (line.toLowerCase().includes('h264') || line.toLowerCase().includes('avc'))
+          );
+          
+          if (rtpmapLine) {
+            h264PayloadTypes.push(pt);
+          } else {
+            otherPayloadTypes.push(pt);
+          }
+        }
+        
+        // If we found H.264 codecs, prioritize them
+        if (h264PayloadTypes.length > 0) {
+          const newPayloadTypes = [...h264PayloadTypes, ...otherPayloadTypes];
+          const mLineParts = mLine.split(' ');
+          lines[mLineIndex] = `${mLineParts.slice(0, 3).join(' ')} ${newPayloadTypes.join(' ')}`;
+          
+          console.log('H.264 codecs prioritized in SDP:', h264PayloadTypes);
+        }
+        
+        return lines.join('\r\n');
+      }
+      
+      startWebRTCStatsMonitoring() {
+        if (this.webrtcStatsInterval) {
+          clearInterval(this.webrtcStatsInterval);
+        }
+        
+        this.webrtcStatsInterval = setInterval(async () => {
+          if (!this.receiverPC || !this.enableWebRTC || !this.isProcessing) {
+            return;
+          }
+          
+          try {
+            const stats = await this.receiverPC.getStats();
+            
+            // Look for inbound video stream stats
+            for (const [id, stat] of stats) {
+              if (stat.type === 'inbound-rtp' && stat.mediaType === 'video') {
+                const framesDecoded = stat.framesDecoded || 0;
+                
+                // Calculate FPS based on frames decoded
+                if (this.lastWebRTCFramesDecoded > 0) {
+                  const framesDelta = framesDecoded - this.lastWebRTCFramesDecoded;
+                  // Stats are collected every second, so framesDelta is already FPS
+                  this.webrtcFrameCount = framesDelta;
+                }
+                
+                this.lastWebRTCFramesDecoded = framesDecoded;
+                
+                // Log additional useful stats
+                if (stat.framesDropped > 0) {
+                  console.warn(`WebRTC frames dropped: ${stat.framesDropped}`);
+                }
+                
+                break; // Found the video inbound stream
+              }
+            }
+          } catch (error) {
+            console.warn('Failed to get WebRTC stats:', error);
+          }
+        }, 1000); // Check stats every second
       }
       
       createGPUBuffers(width, height) {
@@ -1196,6 +1464,13 @@
         if (this.enableDecoding) {
           this.initializeDecoding();
         }
+        
+        // Initialize WebRTC if enabled
+        if (this.enableWebRTC) {
+          setTimeout(() => {
+            this.initializeWebRTC();
+          }, 1000);
+        }
       }
       
       stop() {
@@ -1237,6 +1512,27 @@
           this.decoder = null;
         }
         
+        // Clean up WebRTC
+        if (this.webrtcStatsInterval) {
+          clearInterval(this.webrtcStatsInterval);
+          this.webrtcStatsInterval = null;
+        }
+        
+        if (this.senderPC) {
+          this.senderPC.close();
+          this.senderPC = null;
+        }
+        
+        if (this.receiverPC) {
+          this.receiverPC.close();
+          this.receiverPC = null;
+        }
+        
+        if (this.webrtcStream) {
+          this.webrtcStream.getTracks().forEach(track => track.stop());
+          this.webrtcStream = null;
+        }
+        
         // Clean up encoded chunks
         // No longer needed since we're not storing chunks
         
@@ -1266,6 +1562,7 @@
         this.inputVideo.srcObject = null;
         this.outputVideo.srcObject = null;
         this.decodedVideo.srcObject = null;
+        this.webrtcVideo.srcObject = null;
         this.outputStream = null;
         this.decodedStream = null;
         
@@ -1319,6 +1616,7 @@
         this.readbackFpsSpan.textContent = '--';
         this.encodingFpsSpan.textContent = '--';
         this.decodingFpsSpan.textContent = '--';
+        this.webrtcFpsSpan.textContent = '--';
         this.inputResolutionSpan.textContent = '--';
         this.outputResolutionSpan.textContent = '--';
         this.gpuBackendSpan.textContent = '--';
@@ -1328,6 +1626,8 @@
         this.readbackCount = 0;
         this.encodingFrameCount = 0;
         this.decodingFrameCount = 0;
+        this.webrtcFrameCount = 0;
+        this.lastWebRTCFramesDecoded = 0;
       }
     }
     
