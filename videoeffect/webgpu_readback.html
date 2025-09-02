@@ -840,20 +840,7 @@
           // Map and read buffer data
           await this.outputBuffer.mapAsync(GPUMapMode.READ);
           const arrayBuffer = this.outputBuffer.getMappedRange();
-          const data = new Uint8Array(arrayBuffer);
-          
-          // Extract only the actual image data if there's row padding
-          let finalData = data;
-          if (bytesPerRowAligned !== bytesPerRow) {
-            const actualSize = scaledWidth * scaledHeight * 4;
-            finalData = new Uint8Array(actualSize);
-            for (let row = 0; row < scaledHeight; row++) {
-              const srcOffset = row * bytesPerRowAligned;
-              const dstOffset = row * bytesPerRow;
-              finalData.set(data.subarray(srcOffset, srcOffset + bytesPerRow), dstOffset);
-            }
-          }
-          
+
           this.outputBuffer.unmap();
           this.readbackCount++;
           
