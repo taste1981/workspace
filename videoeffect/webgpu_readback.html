@@ -238,7 +238,6 @@
         
         // WebGL2 resources
         this.gl = null;
-        this.inputCanvas = null;
         this.outputCanvas = null;
         this.scalingProgram = null;
         this.inputTexture2D = null;
@@ -335,7 +334,6 @@
       initializeWebGL2() {
         try {
           // Create offscreen canvases for WebGL2 processing (no DOM overhead)
-          this.inputCanvas = new OffscreenCanvas(1, 1); // Will be resized dynamically
           this.outputCanvas = new OffscreenCanvas(1, 1); // Will be resized dynamically
           
           this.gl = this.outputCanvas.getContext('webgl2');
@@ -695,20 +693,14 @@
       
       async processWithWebGL2(videoFrame, width, height) {
         // Set canvas size
-        this.inputCanvas.width = width;
-        this.inputCanvas.height = height;
         this.outputCanvas.width = width;
         this.outputCanvas.height = height;
-        
-        // Draw VideoFrame to input canvas using 2D context
-        const inputCtx = this.inputCanvas.getContext('2d');
-        inputCtx.drawImage(videoFrame, 0, 0, width, height);
         
         // Upload to WebGL2 texture using texImage2D
         this.gl.bindTexture(this.gl.TEXTURE_2D, this.inputTexture2D);
         this.gl.texImage2D(
           this.gl.TEXTURE_2D, 0, this.gl.RGBA, 
-          this.gl.RGBA, this.gl.UNSIGNED_BYTE, this.inputCanvas
+          this.gl.RGBA, this.gl.UNSIGNED_BYTE, videoFrame
         );
         this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
         this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.LINEAR);
@@ -956,7 +948,6 @@
             if (this.vao) this.gl.deleteVertexArray(this.vao);
           }
           this.gl = null;
-          this.inputCanvas = null;
           this.outputCanvas = null;
           this.inputTexture2D = null;
           this.scaledTexture2D = null;
