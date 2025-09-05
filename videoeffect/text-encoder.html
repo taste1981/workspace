@@ -154,7 +154,7 @@
 <body>
     <div class="container">
         <h1>Animated Text AV1 Encoder</h1>
-        <p>Renders animated colorful text on a 720p canvas and encodes it to AV1 at 30fps using WebCodecs</p>
+        <p>Renders animated colorful text on a 720p canvas and encodes it to AV1 at 10fps using WebCodecs</p>
         
         <div class="controls">
             <button id="startBtn" class="start-btn">Start Recording</button>
@@ -183,6 +183,10 @@
                 this.lastAnimationTime = performance.now();
                 this.lastEncodingTime = performance.now();
                 this.totalDataSize = 0;
+                
+                // Frame rate control for encoding
+                this.targetEncodingInterval = 1000 / 10; // 100ms for 10fps
+                this.lastEncodeTime = 0;
                 
                 // Animation parameters
                 this.textOffset = 0;
@@ -366,7 +370,12 @@
                     this.drawFrame();
                     
                     if (this.isRecording && this.encoder) {
-                        this.encodeFrame();
+                        // Only encode if enough time has passed (100ms for 10fps)
+                        const now = performance.now();
+                        if (now - this.lastEncodeTime >= this.targetEncodingInterval) {
+                            this.encodeFrame();
+                            this.lastEncodeTime = now;
+                        }
                     }
                     
                     this.animationId = requestAnimationFrame(animate);
@@ -380,7 +389,7 @@
                     // Create VideoFrame from canvas
                     const videoFrame = new VideoFrame(this.canvas, {
                         timestamp: performance.now() * 1000, // Convert to microseconds
-                        duration: 1000000 / 30 // 30fps in microseconds
+                        duration: 1000000 / 10 // 10fps in microseconds (100ms per frame)
                     });
                     
                     // Encode the frame if queue is not too full
@@ -411,9 +420,10 @@
                         codec: 'av01.0.04M.08', // AV1 Main Profile, Level 4.0
                         width: 1280,
                         height: 720,
-                        bitrate: 2000000, // 2 Mbps
-                        framerate: 30,
+                        bitrate: 1000000, // 1 Mbps
+                        framerate: 10,
                         bitrateMode: 'constant',
+                        hardwareAcceleration: 'prefer-hardware',
                         contentHint: 'detail' // Optimize for screen content with sharp details
                     };
                     
