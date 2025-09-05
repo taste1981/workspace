@@ -190,6 +190,12 @@
                 this.text = "The quick brown fox jumps over the lazy dog. ";
                 this.repeatedText = this.text.repeat(20); // Repeat to fill screen
                 
+                // Brighter colors for grid lines to make them more visible
+                this.gridColors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ff8800', '#8800ff'];
+                
+                // Very distinct colors for 3-line groups - high contrast between adjacent groups
+                this.groupColors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#ff8800', '#00ffff', '#8800ff', '#ff4444', '#44ff44', '#4444ff', '#ffff44'];
+                
                 // Pre-calculated gradient data for better performance
                 this.gradientImageData = null;
                 this.initializeGradient();
@@ -281,36 +287,38 @@
                 this.ctx.putImageData(this.gradientImageData, startX, startY);
                 
                 // Draw grid lines
-                this.ctx.lineWidth = 0.1;
+                this.ctx.lineWidth = 0.5; // Make lines thicker for better visibility
                 
                 const lines = 12; // Number of text lines
                 const lineHeight = this.canvas.height / lines;
                 
-                // Draw horizontal lines in groups of 5 with colors (much closer together)
+                // Draw horizontal lines in groups of 3 with colors (much closer together)
                 for (let line = 0; line <= lines; line++) {
                     const y = line * lineHeight;
-                    const colorIndex = Math.floor(line / 5) % this.colors.length;
-                    this.ctx.strokeStyle = this.colors[colorIndex];
                     
-                    // Draw 5 very close lines for each group
-                    for (let offset = 0; offset < 5; offset++) {
+                    // Draw 3 close lines for each group with different colors for each line
+                    for (let offset = 0; offset < 3; offset++) {
+                        const colorIndex = (line * 3 + offset) % this.groupColors.length;
+                        this.ctx.strokeStyle = this.groupColors[colorIndex];
+                        
                         this.ctx.beginPath();
-                        this.ctx.moveTo(0, y + offset * 0.2); // Much closer spacing
-                        this.ctx.lineTo(this.canvas.width, y + offset * 0.2);
+                        this.ctx.moveTo(0, y + offset * 2.5); // 2.5 pixels apart - more visible spacing
+                        this.ctx.lineTo(this.canvas.width, y + offset * 2.5);
                         this.ctx.stroke();
                     }
                 }
                 
-                // Draw vertical lines in groups of 5 with colors (much closer together, every 80 pixels)
+                // Draw vertical lines in groups of 3 with colors (much closer together, every 80 pixels)
                 for (let x = 0; x <= this.canvas.width; x += 80) {
-                    const colorIndex = Math.floor(x / 400) % this.colors.length;
-                    this.ctx.strokeStyle = this.colors[colorIndex];
                     
-                    // Draw 5 very close lines for each group
-                    for (let offset = 0; offset < 5; offset++) {
+                    // Draw 3 close lines for each group with different colors for each line
+                    for (let offset = 0; offset < 3; offset++) {
+                        const colorIndex = (Math.floor(x / 80) * 3 + offset) % this.groupColors.length;
+                        this.ctx.strokeStyle = this.groupColors[colorIndex];
+                        
                         this.ctx.beginPath();
-                        this.ctx.moveTo(x + offset * 0.2, 0); // Much closer spacing
-                        this.ctx.lineTo(x + offset * 0.2, this.canvas.height);
+                        this.ctx.moveTo(x + offset * 2.5, 0); // 2.5 pixels apart - more visible spacing
+                        this.ctx.lineTo(x + offset * 2.5, this.canvas.height);
                         this.ctx.stroke();
                     }
                 }
