@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Animated Text AV1 Encoder</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        
+        .start-btn {
+            background-color: #4CAF50;
+            color: white;
+        }
+        
+        .start-btn:hover {
+            background-color: #45a049;
+        }
+        
+        .start-btn:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        
+        .stop-btn {
+            background-color: #f44336;
+            color: white;
+        }
+        
+        .stop-btn:hover {
+            background-color: #da190b;
+        }
+        
+        .stop-btn:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        
+        .download-btn {
+            background-color: #2196F3;
+            color: white;
+        }
+        
+        .download-btn:hover {
+            background-color: #0b7dda;
+        }
+        
+        .download-btn:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        
+        .status.info {
+            background-color: #e3f2fd;
+            color: #1976d2;
+            border: 1px solid #bbdefb;
+        }
+        
+        .status.success {
+            background-color: #e8f5e8;
+            color: #2e7d32;
+            border: 1px solid #c8e6c9;
+        }
+        
+        .status.error {
+            background-color: #ffebee;
+            color: #c62828;
+            border: 1px solid #ffcdd2;
+        }
+        
+        .canvas-container {
+            text-align: center;
+            margin: 20px 0;
+        }
+        
+        canvas {
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            max-width: 100%;
+            height: auto;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        
+        .stat-item {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 4px;
+            border: 1px solid #e0e0e0;
+        }
+        
+        .stat-label {
+            font-weight: bold;
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+        
+        .stat-value {
+            font-size: 20px;
+            color: #333;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Animated Text AV1 Encoder</h1>
+        <p>Renders animated colorful text on a 720p canvas and encodes it to AV1 at 30fps using WebCodecs</p>
+        
+        <div class="controls">
+            <button id="startBtn" class="start-btn">Start Recording</button>
+            <button id="stopBtn" class="stop-btn" disabled>Stop Recording</button>
+            <button id="downloadBtn" class="download-btn" disabled>Download Video</button>
+        </div>
+        
+        <div id="status" class="status info">Click "Start Recording" to begin</div>
+        
+        <div class="canvas-container">
+            <canvas id="canvas" width="1280" height="720"></canvas>
+        </div>
+    </div>
+
+    <script>
+        class TextVideoEncoder {
+            constructor() {
+                this.canvas = document.getElementById('canvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.encoder = null;
+                this.isRecording = false;
+                this.animationId = null;
+                this.encodedChunks = [];
+                this.frameCount = 0;
+                this.encodingFrameCount = 0;
+                this.lastAnimationTime = performance.now();
+                this.lastEncodingTime = performance.now();
+                this.totalDataSize = 0;
+                
+                // Animation parameters
+                this.textOffset = 0;
+                this.colors = ['#ff3333', '#33ff33', '#3333ff', '#ffff33', '#ff33ff', '#33ffff', '#ff8833', '#cc33ff'];
+                this.text = "The quick brown fox jumps over the lazy dog. ";
+                this.repeatedText = this.text.repeat(20); // Repeat to fill screen
+                
+                // Pre-calculated gradient data for better performance
+                this.gradientImageData = null;
+                this.initializeGradient();
+                
+                // DOM elements
+                this.startBtn = document.getElementById('startBtn');
+                this.stopBtn = document.getElementById('stopBtn');
+                this.downloadBtn = document.getElementById('downloadBtn');
+                this.statusDiv = document.getElementById('status');
+                
+                this.bindEvents();
+                this.startAnimation();
+            }
+            
+            initializeGradient() {
+                // Pre-calculate the gradient pattern once for maximum performance
+                const width = this.canvas.width / 2;
+                const height = this.canvas.height / 2;
+                
+                this.gradientImageData = this.ctx.createImageData(width, height);
+                const data = this.gradientImageData.data;
+                
+                // Calculate base gradient pattern
+                for (let i = 0; i < data.length; i += 4) {
+                    const pixelIndex = i / 4;
+                    const x = pixelIndex % width;
+                    const y = Math.floor(pixelIndex / width);
+                    
+                    const normalizedX = x / width;
+                    const normalizedY = y / height;
+                    
+                    // Base pattern - we'll animate by adding to these values
+                    const r = Math.sin(normalizedX * 6) * 127 + 128;
+                    const g = Math.sin(normalizedY * 8) * 127 + 128;
+                    const b = Math.sin((normalizedX + normalizedY) * 4) * 127 + 128;
+                    
+                    data[i] = r;     // Red
+                    data[i + 1] = g; // Green
+                    data[i + 2] = b; // Blue
+                    data[i + 3] = 255; // Alpha
+                }
+            }
+            
+            updateGradient() {
+                // Very fast animation: just add a small value to each pixel
+                const data = this.gradientImageData.data;
+                const timeOffset = this.textOffset * 0.5; // Animation speed
+                
+                for (let i = 0; i < data.length; i += 4) {
+                    // Add time-based offset to create smooth animation
+                    data[i] = (data[i] + 1) % 256;     // Red
+                    data[i + 1] = (data[i + 1] + 1.3) % 256; // Green (different speed)
+                    data[i + 2] = (data[i + 2] + 0.7) % 256; // Blue (different speed)
+                    // Alpha stays 255
+                }
+            }
+            
+            bindEvents() {
+                this.startBtn.addEventListener('click', () => this.startRecording());
+                this.stopBtn.addEventListener('click', () => this.stopRecording());
+                this.downloadBtn.addEventListener('click', () => this.downloadVideo());
+            }
+            
+            updateStatus(message, type = 'info') {
+                this.statusDiv.textContent = message;
+                this.statusDiv.className = `status ${type}`;
+            }
+            
+            formatBytes(bytes) {
+                if (bytes === 0) return '0 B';
+                const k = 1024;
+                const sizes = ['B', 'KB', 'MB', 'GB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+            }
+            
+            drawFrame() {
+                // Clear canvas with black background (top half) and white background (bottom half)
+                this.ctx.fillStyle = '#000000';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height / 2);
+                
+                this.ctx.fillStyle = '#ffffff';
+                this.ctx.fillRect(0, this.canvas.height / 2, this.canvas.width, this.canvas.height / 2);
+                
+                // Update and draw the animated gradient - much faster now!
+                this.updateGradient();
+                const startX = this.canvas.width / 2;
+                const startY = this.canvas.height / 2;
+                this.ctx.putImageData(this.gradientImageData, startX, startY);
+                
+                // Draw grid lines
+                this.ctx.lineWidth = 0.1;
+                
+                const lines = 12; // Number of text lines
+                const lineHeight = this.canvas.height / lines;
+                
+                // Draw horizontal lines in groups of 5 with colors (much closer together)
+                for (let line = 0; line <= lines; line++) {
+                    const y = line * lineHeight;
+                    const colorIndex = Math.floor(line / 5) % this.colors.length;
+                    this.ctx.strokeStyle = this.colors[colorIndex];
+                    
+                    // Draw 5 very close lines for each group
+                    for (let offset = 0; offset < 5; offset++) {
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(0, y + offset * 0.2); // Much closer spacing
+                        this.ctx.lineTo(this.canvas.width, y + offset * 0.2);
+                        this.ctx.stroke();
+                    }
+                }
+                
+                // Draw vertical lines in groups of 5 with colors (much closer together, every 80 pixels)
+                for (let x = 0; x <= this.canvas.width; x += 80) {
+                    const colorIndex = Math.floor(x / 400) % this.colors.length;
+                    this.ctx.strokeStyle = this.colors[colorIndex];
+                    
+                    // Draw 5 very close lines for each group
+                    for (let offset = 0; offset < 5; offset++) {
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(x + offset * 0.2, 0); // Much closer spacing
+                        this.ctx.lineTo(x + offset * 0.2, this.canvas.height);
+                        this.ctx.stroke();
+                    }
+                }
+                
+                // Set font - extra slim
+                this.ctx.font = '100 16px Arial';
+                this.ctx.textBaseline = 'middle';
+                
+                for (let line = 0; line < lines; line++) {
+                    const y = lineHeight * (line + 0.5);
+                    
+                    // Different scroll speed for each line
+                    const scrollSpeed = (line % 3 + 1) * 2;
+                    const lineOffset = (this.textOffset * scrollSpeed) % (this.ctx.measureText(this.text).width);
+                    
+                    // Draw text multiple times to fill the line
+                    const textWidth = this.ctx.measureText(this.text).width;
+                    const repeats = Math.ceil(this.canvas.width / textWidth) + 2;
+                    
+                    for (let repeat = 0; repeat < repeats; repeat++) {
+                        const x = repeat * textWidth - lineOffset;
+                        
+                        // Draw each character with different colors
+                        let charX = x;
+                        for (let i = 0; i < this.text.length; i++) {
+                            const char = this.text[i];
+                            const colorIndex = (line * this.text.length + i + Math.floor(this.textOffset / 10)) % this.colors.length;
+                            this.ctx.fillStyle = this.colors[colorIndex];
+                            
+                            if (charX < this.canvas.width + 50 && charX > -50) { // Only draw visible characters
+                                this.ctx.fillText(char, charX, y);
+                            }
+                            
+                            charX += this.ctx.measureText(char).width;
+                        }
+                    }
+                }
+                
+                // Update text offset for animation
+                this.textOffset += 0.3;
+            }
+            
+            startAnimation() {
+                const animate = () => {
+                    this.drawFrame();
+                    
+                    if (this.isRecording && this.encoder) {
+                        this.encodeFrame();
+                    }
+                    
+                    this.animationId = requestAnimationFrame(animate);
+                };
+                
+                animate();
+            }
+            
+            async encodeFrame() {
+                try {
+                    // Create VideoFrame from canvas
+                    const videoFrame = new VideoFrame(this.canvas, {
+                        timestamp: performance.now() * 1000, // Convert to microseconds
+                        duration: 1000000 / 30 // 30fps in microseconds
+                    });
+                    
+                    // Encode the frame if queue is not too full
+                    if (this.encoder.encodeQueueSize < 10) {
+                        this.encoder.encode(videoFrame);
+                        this.encodingFrameCount++;
+                    } else {
+                        console.warn('Encoder queue full, dropping frame');
+                    }
+                    
+                    videoFrame.close();
+                } catch (error) {
+                    console.error('Error encoding frame:', error);
+                }
+            }
+            
+            async startRecording() {
+                try {
+                    this.updateStatus('Initializing encoder...', 'info');
+                    
+                    // Reset data
+                    this.encodedChunks = [];
+                    this.totalDataSize = 0;
+                    this.encodingFrameCount = 0;
+                    
+                    // Initialize AV1 encoder
+                    const config = {
+                        codec: 'av01.0.04M.08', // AV1 Main Profile, Level 4.0
+                        width: 1280,
+                        height: 720,
+                        bitrate: 2000000, // 2 Mbps
+                        framerate: 30,
+                        bitrateMode: 'constant',
+                        contentHint: 'detail' // Optimize for screen content with sharp details
+                    };
+                    
+                    this.encoder = new VideoEncoder({
+                        output: (chunk, metadata) => {
+                            // Store the encoded chunk
+                            this.encodedChunks.push({
+                                data: new Uint8Array(chunk.byteLength),
+                                timestamp: chunk.timestamp,
+                                type: chunk.type,
+                                duration: chunk.duration
+                            });
+                            
+                            // Copy the chunk data
+                            chunk.copyTo(this.encodedChunks[this.encodedChunks.length - 1].data);
+                            
+                            this.totalDataSize += chunk.byteLength;
+                        },
+                        error: (error) => {
+                            console.error('AV1 encoding error:', error);
+                            this.updateStatus(`Encoding error: ${error.message}`, 'error');
+                        }
+                    });
+                    
+                    this.encoder.configure(config);
+                    
+                    this.isRecording = true;
+                    this.startBtn.disabled = true;
+                    this.stopBtn.disabled = false;
+                    this.downloadBtn.disabled = true;
+                    
+                    this.updateStatus('Recording started - encoding canvas to AV1', 'success');
+                    
+                } catch (error) {
+                    console.error('Failed to start recording:', error);
+                    this.updateStatus(`Failed to start recording: ${error.message}`, 'error');
+                }
+            }
+            
+            async stopRecording() {
+                try {
+                    this.updateStatus('Stopping recording...', 'info');
+                    
+                    this.isRecording = false;
+                    
+                    if (this.encoder) {
+                        // Flush any remaining frames
+                        await this.encoder.flush();
+                        this.encoder.close();
+                        this.encoder = null;
+                    }
+                    
+                    this.startBtn.disabled = false;
+                    this.stopBtn.disabled = true;
+                    this.downloadBtn.disabled = false;
+                    
+                    this.updateStatus(`Recording stopped - ${this.encodedChunks.length} chunks encoded`, 'success');
+                    
+                } catch (error) {
+                    console.error('Error stopping recording:', error);
+                    this.updateStatus(`Error stopping recording: ${error.message}`, 'error');
+                }
+            }
+            
+            downloadVideo() {
+                if (this.encodedChunks.length === 0) {
+                    this.updateStatus('No video data to download', 'error');
+                    return;
+                }
+                
+                try {
+                    // Create a simple MP4 container with the H.264 data
+                    // Note: This creates a raw H.264 stream, not a proper MP4
+                    // For a proper MP4, you'd need a more complex muxer
+                    
+                    let totalSize = 0;
+                    this.encodedChunks.forEach(chunk => {
+                        totalSize += chunk.data.byteLength;
+                    });
+                    
+                    const combinedData = new Uint8Array(totalSize);
+                    let offset = 0;
+                    
+                    this.encodedChunks.forEach(chunk => {
+                        combinedData.set(chunk.data, offset);
+                        offset += chunk.data.byteLength;
+                    });
+                    
+                    const blob = new Blob([combinedData], { type: 'video/av01' });
+                    const url = URL.createObjectURL(blob);
+                    
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `animated-text-${Date.now()}.av1`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    
+                    URL.revokeObjectURL(url);
+                    
+                    this.updateStatus(`Video downloaded (${this.formatBytes(totalSize)})`, 'success');
+                    
+                } catch (error) {
+                    console.error('Error downloading video:', error);
+                    this.updateStatus(`Error downloading video: ${error.message}`, 'error');
+                }
+            }
+        }
+        
+        // Initialize the application
+        const encoder = new TextVideoEncoder();
+        
+        // Check WebCodecs support
+        if (!window.VideoEncoder) {
+            document.getElementById('status').textContent = 'WebCodecs VideoEncoder is not supported in this browser';
+            document.getElementById('status').className = 'status error';
+            document.getElementById('startBtn').disabled = true;
+        }
+    </script>
+</body>
+</html>
