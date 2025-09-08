@@ -5,16 +5,23 @@ async function renderWithWebGPU(params, videoFrame) {
   const height = params.webgpuCanvas.height;
 
   // Import external texture.
-  const sourceTexture = device.createTexture({
-    size: [videoFrame.displayWidth, videoFrame.displayHeight, 1],
-    format: 'rgba8unorm',
-    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
-  });
-  device.queue.copyExternalImageToTexture(
-    { source: videoFrame },
-    { texture: sourceTexture },
-    [videoFrame.displayWidth, videoFrame.displayHeight]
-  );
+  let sourceTexture;
+  if (params.zeroCopy) {
+    sourceTexture = device.importExternalTexture({
+      source: videoFrame,
+    });
+  } else {
+    sourceTexture = device.createTexture({
+      size: [videoFrame.displayWidth, videoFrame.displayHeight, 1],
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    device.queue.copyExternalImageToTexture(
+      { source: videoFrame },
+      { texture: sourceTexture },
+      [videoFrame.displayWidth, videoFrame.displayHeight]
+    );
+  }
 
   // Scale down input, segment, read back and upload.
   let maskTexture;
@@ -26,14 +33,22 @@ async function renderWithWebGPU(params, videoFrame) {
       format: 'rgba8unorm',
       usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC,
     });
-    const downscaleBindGroup = device.createBindGroup({
-      layout: params.downscalePipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: sourceTexture.createView() },
-        { binding: 1, resource: params.downscaleSampler },
-        { binding: 2, resource: destTexture.createView() },
-      ],
-    });
+    let downscaleBindGroup;
+    try {
+      downscaleBindGroup = device.createBindGroup({
+        layout: params.downscalePipeline.getBindGroupLayout(0),
+        entries: [
+          {
+            binding: 0, resource: params.zeroCopy ? sourceTexture : sourceTexture.createView()
+          },
+          { binding: 1, resource: params.downscaleSampler },
+          { binding: 2, resource: destTexture.createView() },
+        ],
+      });
+    } catch (error) {
+      console.warn('bind failed:', error);
+    }
+
     const commandEncoder = device.createCommandEncoder();
     const computePass = commandEncoder.beginComputePass();
     computePass.setPipeline(params.downscalePipeline);
@@ -106,25 +121,29 @@ async function renderWithWebGPU(params, videoFrame) {
   device.queue.writeBuffer(params.uniformBuffer, 0, uniformData);
 
   // Create bind group
-  const bindGroup = device.createBindGroup({
-    layout: params.computePipeline.getBindGroupLayout(0),
-    entries: [
-      {
-        binding: 0,
-        resource: sourceTexture.createView(),
-      },
-      {
-        binding: 1,
-        resource: maskTexture.createView(),
-      },
-      {
-        binding: 2,
-        resource: outputTexture.createView(),
-      },
-      { binding: 3, resource: params.blurSampler },
-      { binding: 4, resource: { buffer: params.uniformBuffer } },
-    ],
-  });
+  let bindGroup;
+  try {
+    bindGroup = device.createBindGroup({
+      layout: params.computePipeline.getBindGroupLayout(0),
+      entries: [
+        {
+          binding: 0, resource: params.zeroCopy ? sourceTexture : sourceTexture.createView()
+        },
+        {
+          binding: 1,
+          resource: maskTexture.createView(),
+        },
+        {
+          binding: 2,
+          resource: outputTexture.createView(),
+        },
+        { binding: 3, resource: params.blurSampler },
+        { binding: 4, resource: { buffer: params.uniformBuffer } },
+      ],
+    });
+  } catch (error) {
+    console.warn('bind failed:', error);
+  }
 
   // Run compute shader
   const commandEncoder = device.createCommandEncoder();
@@ -194,7 +213,9 @@ async function renderWithWebGPU(params, videoFrame) {
   });
 
   // Clean up textures
-  sourceTexture.destroy();
+  if (!params.zeroCopy) {
+    sourceTexture.destroy();
+  }
   maskTexture.destroy();
   outputTexture.destroy();
 
@@ -202,7 +223,8 @@ async function renderWithWebGPU(params, videoFrame) {
 }
 
 // WebGPU blur renderer
-async function createWebGPUBlurRenderer(segmenter) {
+async function createWebGPUBlurRenderer(segmenter, zeroCopy) {
+  console.log("createWebGPUBlurRenderer zeroCopy: ", zeroCopy);
   // Always use full resolution for processing, regardless of display size
   const webgpuCanvas = new OffscreenCanvas(1280, 720);
 
@@ -228,7 +250,7 @@ async function createWebGPUBlurRenderer(segmenter) {
   const segmentationHeight = 144;
 
   const downscaleShaderCode = `
-      @group(0) @binding(0) var inputTexture: texture_2d<f32>;
+      @group(0) @binding(0) var inputTexture: ${zeroCopy ? "texture_external" : "texture_2d<f32>"};
       @group(0) @binding(1) var textureSampler: sampler;
       @group(0) @binding(2) var outputTexture: texture_storage_2d<rgba8unorm, write>;
 
@@ -239,7 +261,7 @@ async function createWebGPUBlurRenderer(segmenter) {
             return;
         }
         let uv = (vec2<f32>(global_id.xy) + vec2<f32>(0.5, 0.5)) / vec2<f32>(outputDims);
-        let color = textureSampleLevel(inputTexture, textureSampler, uv, 0.0);
+        let color = textureSampleBaseClampToEdge(inputTexture, textureSampler, uv);
         textureStore(outputTexture, global_id.xy, color);
       }
     `;
@@ -261,7 +283,7 @@ async function createWebGPUBlurRenderer(segmenter) {
 
   // WebGPU compute shader for blur effect
   const computeShaderCode = `
-      @group(0) @binding(0) var inputTexture: texture_2d<f32>;
+      @group(0) @binding(0) var inputTexture: ${zeroCopy ? "texture_external" : "texture_2d<f32>"};
       @group(0) @binding(1) var maskTexture: texture_2d<f32>;
       @group(0) @binding(2) var outputTexture: texture_storage_2d<rgba8unorm, write>;
       @group(0) @binding(3) var textureSampler: sampler;
@@ -284,7 +306,7 @@ async function createWebGPUBlurRenderer(segmenter) {
         let coord = vec2<i32>(i32(global_id.x), i32(global_id.y));
         let uv = (vec2<f32>(coord) + 0.5) / vec2<f32>(inputDims);
         
-        let originalColor = textureSampleLevel(inputTexture, textureSampler, uv, 0.0);
+        let originalColor = textureSampleBaseClampToEdge(inputTexture, textureSampler, uv);
         
         // Calculate corresponding mask coordinate (handle different dimensions)
         let maskCoord = vec2<i32>(
@@ -302,7 +324,7 @@ async function createWebGPUBlurRenderer(segmenter) {
           for (var y = -4; y <= 4; y++) {
             let offset = vec2<f32>(f32(x), f32(y)) * uniforms.blurAmount / uniforms.resolution;
             let weight = 1.0 / (1.0 + length(vec2<f32>(f32(x), f32(y))));
-            blurredColor += textureSampleLevel(inputTexture, textureSampler, uv + offset, 0.0) * weight;
+            blurredColor += textureSampleBaseClampToEdge(inputTexture, textureSampler, uv + offset) * weight;
             totalWeight += weight;
           }
         }
@@ -403,6 +425,7 @@ async function createWebGPUBlurRenderer(segmenter) {
         downscalePipeline,
         downscaleSampler,
         renderSampler,
+        zeroCopy,
       };
       try {
         return await renderWithWebGPU(params, videoFrame);
