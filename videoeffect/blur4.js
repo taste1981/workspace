@@ -46,7 +46,8 @@ async function initializeBlurRenderer() {
     const useWebGPU = document.querySelector('input[name="renderer"]:checked').value === 'webgpu';
     try {
       if (useWebGPU && 'gpu' in navigator) {
-        appBlurRenderer = await createWebGPUBlurRenderer(segmenter);
+        const zeroCopy = zeroCopyCheckbox.checked;
+        appBlurRenderer = await createWebGPUBlurRenderer(segmenter, zeroCopy);
         appStatus.innerText = 'Renderer: WebGPU';
         console.log('Using WebGPU for blur rendering');
       } else {
@@ -196,6 +197,8 @@ const appFpsDisplay = document.getElementById('fpsDisplay');
 const appVideo = document.getElementById('webcam');
 const appProcessedVideo = document.getElementById('processedVideo');
 const appCanvas = document.getElementById('output');
+const zeroCopyCheckbox = document.getElementById('zeroCopy');
+const zeroCopyLabel = document.getElementById('zeroCopyLabel');
 
 // Check browser compatibility
 const hasWebGPU = 'gpu' in navigator;
@@ -318,11 +321,21 @@ async function initializeApp() {
   // Handle display size changes
   displaySizeSelect.addEventListener('change', updateDisplaySize);
   
+  const updateOptionState = () => {
+    const isWebGPU = webgpuRadio.checked;
+    zeroCopyCheckbox.disabled = !isWebGPU;
+    zeroCopyLabel.style.color = isWebGPU ? '' : '#aaa';
+  };
+  const changeEventListener = () => {
+    updateOptionState();
+    if (isRunning) rendererSwitchRequested = true;
+  };
+  zeroCopyCheckbox.addEventListener('change', changeEventListener);
   document.querySelectorAll('input[name="renderer"]').forEach(radio => {
-    radio.addEventListener('change', () => {
-      if (isRunning) rendererSwitchRequested = true;
-    });
+    radio.addEventListener('change', changeEventListener);
   });
+
+  updateOptionState();
 }
 
 // Initialize the app
