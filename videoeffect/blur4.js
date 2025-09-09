@@ -46,7 +46,9 @@ async function initializeBlurRenderer() {
     const useWebGPU = document.querySelector('input[name="renderer"]:checked').value === 'webgpu';
     try {
       if (useWebGPU && 'gpu' in navigator) {
-        appBlurRenderer = await createWebGPUBlurRenderer(segmenter);
+        const zeroCopy = zeroCopyCheckbox.checked;
+        const directOutput = directOutputCheckbox.checked;
+        appBlurRenderer = await createWebGPUBlurRenderer(segmenter, zeroCopy, directOutput);
         appStatus.innerText = 'Renderer: WebGPU';
         console.log('Using WebGPU for blur rendering');
       } else {
@@ -196,6 +198,10 @@ const appFpsDisplay = document.getElementById('fpsDisplay');
 const appVideo = document.getElementById('webcam');
 const appProcessedVideo = document.getElementById('processedVideo');
 const appCanvas = document.getElementById('output');
+const zeroCopyCheckbox = document.getElementById('zeroCopy');
+const zeroCopyLabel = document.getElementById('zeroCopyLabel');
+const directOutputCheckbox = document.getElementById('directOutput');
+const directOutputLabel = document.getElementById('directOutputLabel');
 
 // Check browser compatibility
 const hasWebGPU = 'gpu' in navigator;
@@ -318,11 +324,25 @@ async function initializeApp() {
   // Handle display size changes
   displaySizeSelect.addEventListener('change', updateDisplaySize);
   
+  const updateOptionState = () => {
+    const isWebGPU = webgpuRadio.checked;
+    zeroCopyCheckbox.disabled = !isWebGPU;
+    zeroCopyLabel.style.color = isWebGPU ? '' : '#aaa';
+    directOutputCheckbox.disabled = !isWebGPU;
+    directOutputLabel.style.color = isWebGPU ? '' : '#aaa';
+  };
+  const changeEventListener = () => {
+    updateOptionState();
+    if (isRunning) rendererSwitchRequested = true;
+  };
+  zeroCopyCheckbox.addEventListener('change', changeEventListener);
+  directOutputCheckbox.addEventListener('change', changeEventListener);
+
   document.querySelectorAll('input[name="renderer"]').forEach(radio => {
-    radio.addEventListener('change', () => {
-      if (isRunning) rendererSwitchRequested = true;
-    });
+    radio.addEventListener('change', changeEventListener);
   });
+
+  updateOptionState();
 }
 
 // Initialize the app
