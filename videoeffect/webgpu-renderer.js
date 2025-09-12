@@ -106,13 +106,10 @@ async function renderWithWebGPU(params, videoFrame, resourceCache) {
     const downscaledImageData = new ImageData(new Uint8ClampedArray(pixelData.buffer), segmentationWidth, segmentationHeight);
     readbackBuffer.unmap();
 
-    // Segment and upload.
-    const segmentation = await segmenter.segmentPeople(downscaledImageData);
-    if (!segmentation || segmentation.length === 0) {
-      console.warn("Segmentation returned no results.");
-      return null;
-    }
-    const maskImageData = await segmentation[0].mask.toImageData();
+    // Segment
+    const maskImageData = await segmenter(downscaledImageData);
+
+    // Upload
     maskTexture = getOrCreateTexture(device, resourceCache, 'maskTexture',
       [maskImageData.width, maskImageData.height, 1],
       params.directOutput,
