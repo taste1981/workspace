@@ -1,13 +1,3 @@
-const QueryString = function() {
-  var params = {};
-  var r = /([^&=]+)=?([^&]*)/g;
-  function d(s) { return decodeURIComponent(s.replace(/\+/g, ' ')); }
-  var match;
-  while (match = r.exec(window.location.search.substring(1)))
-    params[d(match[1])] = d(match[2]);
-  return params;
-}();
-
 function getMedianValue(array) {
   array = array.sort((a, b) => a - b);
   return array.length % 2 !== 0 ? array[Math.floor(array.length / 2)] :
@@ -216,6 +206,48 @@ const directOutputCheckbox = document.getElementById('directOutput');
 const directOutputLabel = document.getElementById('directOutputLabel');
 const fakeSegmentationCheckbox = document.getElementById('fakeSegmentation');
 
+// Function to update URL from UI state
+function updateUrlFromUi() {
+  const form = document.getElementById('settings-form');
+
+  // When ANY input inside the form changes...
+  form.addEventListener('change', () => {
+    // 1. Get ALL current UI values instantly using FormData
+    const formData = new FormData(form);
+
+    // 2. FormData serializes directly into URLSearchParams
+    const params = new URLSearchParams(formData);
+
+    // 3. Update the URL hash (avoids page reload)
+    // Use history.replaceState to avoid polluting browser history on every click
+    history.replaceState(null, '', '#' + params.toString());
+  });
+}
+
+// Function to update UI from URL parameters on page load
+function updateUiFromUrl() {
+  const params = new URLSearchParams(location.hash.substring(1));
+
+  const renderer = params.get('renderer');
+  if (renderer) {
+    const radio = document.querySelector(`input[name="renderer"][value="${renderer}"]`);
+    if (radio) radio.checked = true;
+  }
+
+  // Only check these if WebGPU is the selected renderer
+  if (document.querySelector('input[name="renderer"]:checked').value === 'webgpu') {
+      zeroCopyCheckbox.checked = params.get('zeroCopy') === 'true';
+      directOutputCheckbox.checked = params.get('directOutput') === 'true';
+  }
+
+  fakeSegmentationCheckbox.checked = params.get('fakeSegmentation') === 'true';
+
+  const displaySize = params.get('displaySize');
+  if (displaySize) {
+    displaySizeSelect.value = displaySize;
+  }
+}
+
 // Check browser compatibility
 const hasWebGPU = 'gpu' in navigator;
 
@@ -324,8 +356,18 @@ function stopVideoProcessing() {
   appFpsDisplay.textContent = 'FPS: --';
 }
 
-// Initialize compatibility info and set up event listeners
+function updateOptionState() {
+  const isWebGPU = webgpuRadio.checked;
+  zeroCopyCheckbox.disabled = !isWebGPU;
+  zeroCopyLabel.style.color = isWebGPU ? '' : '#aaa';
+  directOutputCheckbox.disabled = !isWebGPU;
+  directOutputLabel.style.color = isWebGPU ? '' : '#aaa';
+};
+
 async function initializeApp() {
+  // Set initial UI state from URL before doing anything else
+  updateUiFromUrl();
+
   initializeCompatibilityInfo();
   
   // Set initial display size
@@ -334,25 +376,22 @@ async function initializeApp() {
   startButton.addEventListener('click', startVideoProcessing);
   stopButton.addEventListener('click', stopVideoProcessing);
   
-  // Handle display size changes
-  displaySizeSelect.addEventListener('change', updateDisplaySize);
-  
-  const updateOptionState = () => {
-    const isWebGPU = webgpuRadio.checked;
-    zeroCopyCheckbox.disabled = !isWebGPU;
-    zeroCopyLabel.style.color = isWebGPU ? '' : '#aaa';
-    directOutputCheckbox.disabled = !isWebGPU;
-    directOutputLabel.style.color = isWebGPU ? '' : '#aaa';
-  };
+  displaySizeSelect.addEventListener('change', () => {
+    updateUrlFromUi();
+    updateOptionState();
+    updateDisplaySize();
+  });
+
   const changeEventListener = () => {
     updateOptionState();
+    updateUrlFromUi();
     if (isRunning) rendererSwitchRequested = true;
   };
   zeroCopyCheckbox.addEventListener('change', changeEventListener);
   directOutputCheckbox.addEventListener('change', changeEventListener);
   fakeSegmentationCheckbox.addEventListener('change', changeEventListener);
 
-  document.querySelectorAll('input[name="renderer"]').forEach(radio => {
+  document.querySelectorAll('input[name="renderer"]').forEach((radio) => {
     radio.addEventListener('change', changeEventListener);
   });
 
@@ -361,3 +400,31 @@ async function initializeApp() {
 
 // Initialize the app
 initializeApp();
+
+function loadSettingsFromUrl() {
+  const form = document.getElementById('settings-form');
+  const params = new URLSearchParams(location.hash.substring(1));
+
+  // IMPORTANT: Reset checkboxes first. Unchecked boxes are omitted from 
+  // the URL, so we must manually uncheck them before loading the "checked" ones.
+  form.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false);
+  for (const [key, value] of params.entries()) {
+    const input = form.elements[key]; 
+
+    if (!input) continue; // Skip params that don't match a setting
+
+    if (input.type === 'checkbox') {
+      input.checked = (input.value === value);
+    } else if (input.type === 'radio') {
+      const radio = form.querySelector(`input[name="${key}"][value="${value}"]`);
+      if (radio) radio.checked = true;
+    } else {
+      // Handle text, range, select-one, color, etc.
+      input.value = value;
+    }
+  }
+  updateOptionState();
+}
+
+window.addEventListener('load', loadSettingsFromUrl);
+window.addEventListener('hashchange', loadSettingsFromUrl);
