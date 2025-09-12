@@ -26,6 +26,7 @@
   
   <div style="margin-bottom: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9; width: 600px;">
     <h3 style="margin-top: 0;">Renderer Selection</h3>
+    <div>
     <label style="font: 1em sans-serif; display: block; margin-bottom: 10px;">
       <input type="radio" name="renderer" value="webgl2" checked /> WebGL2 (Compatible)
     </label>
@@ -38,12 +39,21 @@
     <label style="font: 1em sans-serif; display: block; margin-bottom: 10px; padding-left: 20px;" id="directOutputLabel">
       <input type="checkbox" id="directOutput" name="directOutput" unchecked /> Zero-copy output
     </label>
+    </div>
+    <div>
+      <h4>Options</h4>
+      <label style="font: 1em sans-serif; display: block; margin-bottom: 15px;">
+        <input type="checkbox" name="fakeSegmentation" value="fakeSegmentation" id="fakeSegmentation" /> Fake CPU-based segmentation
+      </label>
+    </div>
+    <div>
     <button id="startButton" style="padding: 10px 20px; font-size: 16px; background-color: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer;">
       Start Video Processing
     </button>
     <button id="stopButton" style="padding: 10px 20px; font-size: 16px; background-color: #f44336; color: white; border: none; border-radius: 5px; cursor: pointer; margin-left: 10px; display: none;">
       Stop
     </button>
+    </div>
   </div>
 
   <div style="margin-bottom: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9; width: 600px;">
@@ -68,6 +78,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js" crossorigin="anonymous"></script>
   <script src="webgl-renderer.js"></script>
   <script src="webgpu-renderer.js"></script>
+  <script src="triangle-fake-segmenter.js"></script>
   <script src="blur4.js"></script>
 </body>
 

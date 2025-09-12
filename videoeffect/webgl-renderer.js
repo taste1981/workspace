@@ -82,7 +82,7 @@ function renderWithWebGL2(gl, program, videoFrame, maskImageData, resources) {
 }
 
 // WebGL2 blur renderer
-function createWebGL2BlurRenderer(segmenter) {
+function createWebGL2BlurRenderer(segmenterFunction) {
     // Create a separate canvas for WebGL2 processing at full resolution
     const webglCanvas = document.createElement('canvas');
     // Always use full video resolution for processing, regardless of display size
@@ -219,20 +219,7 @@ function createWebGL2BlurRenderer(segmenter) {
         const downscaledImageData = new ImageData(pixelData, segmentationWidth, segmentationHeight);
 
         // Segment
-        if (!segmenter) {
-            console.error("Segmenter not provided to WebGL2 renderer.");
-            return null;
-        }
-        const segmentation = await segmenter.segmentPeople(downscaledImageData);
-        if (!segmentation || segmentation.length === 0) {
-            console.warn("Segmentation returned no results.");
-            return null;
-        }
-        const maskImageData = await segmentation[0].mask.toImageData();
-        if (!maskImageData) {
-            console.warn("Failed to get mask from segmentation.");
-            return null;
-        }
+        const maskImageData = await segmenterFunction(downscaledImageData);
 
         // WebGL2 rendering implementation with actual blur effect
         renderWithWebGL2(gl, program, videoFrame, maskImageData, {

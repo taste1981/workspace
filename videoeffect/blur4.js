@@ -41,18 +41,30 @@ async function initializeSegmenter() {
     }
 }
 
+async function segmentMediapipe(downscaledImageData) {
+    const segmentation = await segmenter.segmentPeople(downscaledImageData);
+    if (!segmentation || segmentation.length === 0) {
+      console.warn("Segmentation returned no results.");
+      return null;
+    }
+    const maskImageData = await segmentation[0].mask.toImageData();
+    return maskImageData;
+}
+
 // Initialize blur renderer based on radio buttons
 async function initializeBlurRenderer() {
     const useWebGPU = document.querySelector('input[name="renderer"]:checked').value === 'webgpu';
+  const segmenterFunction = fakeSegmentationCheckbox.checked ? createBlurryTriangleMask : segmentMediapipe;
+
     try {
       if (useWebGPU && 'gpu' in navigator) {
         const zeroCopy = zeroCopyCheckbox.checked;
         const directOutput = directOutputCheckbox.checked;
-        appBlurRenderer = await createWebGPUBlurRenderer(segmenter, zeroCopy, directOutput);
+        appBlurRenderer = await createWebGPUBlurRenderer(segmenterFunction, zeroCopy, directOutput);
         appStatus.innerText = 'Renderer: WebGPU';
         console.log('Using WebGPU for blur rendering');
       } else {
-        appBlurRenderer = createWebGL2BlurRenderer(segmenter);
+        appBlurRenderer = createWebGL2BlurRenderer(segmenterFunction);
         appStatus.innerText = 'Renderer: WebGL2';
         console.log('Using WebGL2 for blur rendering');
       }
@@ -65,7 +77,7 @@ async function initializeBlurRenderer() {
       console.warn(`Failed to initialize ${useWebGPU ? 'WebGPU' : 'WebGL2'} renderer:`, error);
       // Fallback to WebGL2 if WebGPU fails
       if (useWebGPU) {
-        appBlurRenderer = createWebGL2BlurRenderer(segmenter);
+        appBlurRenderer = createWebGL2BlurRenderer(segmenterFunction);
         // The fallback should also use the video element path
         appProcessedVideo.style.display = 'block';
         appCanvas.style.display = 'none';
@@ -202,6 +214,7 @@ const zeroCopyCheckbox = document.getElementById('zeroCopy');
 const zeroCopyLabel = document.getElementById('zeroCopyLabel');
 const directOutputCheckbox = document.getElementById('directOutput');
 const directOutputLabel = document.getElementById('directOutputLabel');
+const fakeSegmentationCheckbox = document.getElementById('fakeSegmentation');
 
 // Check browser compatibility
 const hasWebGPU = 'gpu' in navigator;
@@ -337,6 +350,7 @@ async function initializeApp() {
   };
   zeroCopyCheckbox.addEventListener('change', changeEventListener);
   directOutputCheckbox.addEventListener('change', changeEventListener);
+  fakeSegmentationCheckbox.addEventListener('change', changeEventListener);
 
   document.querySelectorAll('input[name="renderer"]').forEach(radio => {
     radio.addEventListener('change', changeEventListener);
