@@ -1,5 +1,6 @@
 class WebRTCSink {
-  constructor() {
+  constructor(codec) {
+    this.codec = codec;
     this.remoteVideo = document.createElement('video');
     this.remoteVideo.autoplay = true;
     this.remoteVideo.playsInline = true;
@@ -26,16 +27,16 @@ class WebRTCSink {
 
   async negotiate() {
     try {
-      // Prefer VP9
+      // Prefer selected codec
       const transceiver = this.pc1.getTransceivers()[0];
       if (transceiver && transceiver.setCodecPreferences) {
         const { codecs } = RTCRtpSender.getCapabilities('video');
-        const vp9Codecs = codecs.filter(c => c.mimeType === 'video/VP9');
-        if (vp9Codecs.length > 0) {
-          console.log('WebRTCSink: setting codec preference to VP9');
-          transceiver.setCodecPreferences(vp9Codecs);
+        const selectedCodecs = codecs.filter(c => c.mimeType === this.codec);
+        if (selectedCodecs.length > 0) {
+          console.log(`WebRTCSink: setting codec preference to ${this.codec}`);
+          transceiver.setCodecPreferences(selectedCodecs);
         } else {
-          console.warn('WebRTCSink: VP9 codec not available.');
+          console.warn(`WebRTCSink: ${this.codec} codec not available.`);
         }
       }
 

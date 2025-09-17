@@ -114,8 +114,9 @@ async function run() {
   if (outputStream && appProcessedVideo) {
     appProcessedVideo.srcObject = outputStream;
     if (webrtcSink.checked && !appWebRTCSink) {
-        appWebRTCSink = new WebRTCSink();
-        appWebRTCSink.setMediaStream(outputStream);
+      const codec = document.getElementById('webrtcCodec').value;
+      appWebRTCSink = new WebRTCSink(codec);
+      appWebRTCSink.setMediaStream(outputStream);
     }
   }
 
@@ -205,6 +206,8 @@ const directOutputCheckbox = document.getElementById('directOutput');
 const directOutputLabel = document.getElementById('directOutputLabel');
 const fakeSegmentationCheckbox = document.getElementById('fakeSegmentation');
 const webrtcSink = document.getElementById('webrtcSink');
+const webrtcCodec = document.getElementById('webrtcCodec');
+const webrtcCodecLabel = document.getElementById('webrtcCodecLabel');
 const videoContainer = document.getElementById('videoContainer');
 
 // Function to update URL from UI state
@@ -243,6 +246,11 @@ function updateUiFromUrl() {
 
   fakeSegmentationCheckbox.checked = params.get('fakeSegmentation') === 'true';
   webrtcSink.checked = params.get('webrtcSink') === 'true';
+
+  const codec = params.get('webrtcCodec');
+  if (codec) {
+    webrtcCodec.value = codec;
+  }
 
   const displaySize = params.get('displaySize');
   if (displaySize) {
@@ -345,11 +353,31 @@ function updateOptionState() {
   zeroCopyLabel.style.color = isWebGPU ? '' : '#aaa';
   directOutputCheckbox.disabled = !isWebGPU;
   directOutputLabel.style.color = isWebGPU ? '' : '#aaa';
+
+  const useWebRTCSink = webrtcSink.checked;
+  webrtcCodec.style.display = useWebRTCSink ? 'inline-block' : 'none';
+  webrtcCodecLabel.style.display = useWebRTCSink ? 'block' : 'none';
 };
 
 async function initializeApp() {
   // Set initial UI state from URL before doing anything else
   updateUiFromUrl();
+
+  // Populate WebRTC codec options
+  if (RTCRtpSender.getCapabilities) {
+    const capabilities = RTCRtpSender.getCapabilities('video');
+    if (capabilities) {
+      const supportedCodecs = new Set();
+      capabilities.codecs.forEach(codec => {
+        if (codec.mimeType === 'video/VP9' || codec.mimeType === 'video/H265') {
+          supportedCodecs.add(codec.mimeType);
+        }
+      });
+      supportedCodecs.forEach(mimeType => {
+        webrtcCodec.add(new Option(mimeType, mimeType));
+      });
+    }
+  }
 
   initializeCompatibilityInfo();
   
