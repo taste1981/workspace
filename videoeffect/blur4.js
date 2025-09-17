@@ -112,7 +112,11 @@ async function run() {
   const writer = trackGenerator.writable.getWriter();
   const outputStream = new MediaStream([trackGenerator]);
   if (outputStream && appProcessedVideo) {
-      appProcessedVideo.srcObject = outputStream;
+    appProcessedVideo.srcObject = outputStream;
+    if (webrtcSink.checked && !appWebRTCSink) {
+        appWebRTCSink = new WebRTCSink();
+        appWebRTCSink.setMediaStream(outputStream);
+    }
   }
 
   // Main processing loop
@@ -185,6 +189,7 @@ let appBlurRenderer = null;
 let appStream = null;
 let isRunning = false;
 let appReader = null;
+let appWebRTCSink = null;
 
 // Get DOM elements for app control
 const startButton = document.getElementById('startButton');
@@ -199,6 +204,7 @@ const zeroCopyLabel = document.getElementById('zeroCopyLabel');
 const directOutputCheckbox = document.getElementById('directOutput');
 const directOutputLabel = document.getElementById('directOutputLabel');
 const fakeSegmentationCheckbox = document.getElementById('fakeSegmentation');
+const webrtcSink = document.getElementById('webrtcSink');
 const videoContainer = document.getElementById('videoContainer');
 
 // Function to update URL from UI state
@@ -236,6 +242,7 @@ function updateUiFromUrl() {
   }
 
   fakeSegmentationCheckbox.checked = params.get('fakeSegmentation') === 'true';
+  webrtcSink.checked = params.get('webrtcSink') === 'true';
 
   const displaySize = params.get('displaySize');
   if (displaySize) {
@@ -321,7 +328,7 @@ function stopVideoProcessing() {
     appReader.cancel().catch(() => {}); // Ignore cancel errors
     appReader = null;
   }
-  
+
   appBlurRenderer = null;
   
   startButton.disabled = false;
@@ -363,9 +370,15 @@ async function initializeApp() {
     updateUrlFromUi();
     if (isRunning) rendererSwitchRequested = true;
   };
-  zeroCopyCheckbox.addEventListener('change', changeEventListener);
-  directOutputCheckbox.addEventListener('change', changeEventListener);
-  fakeSegmentationCheckbox.addEventListener('change', changeEventListener);
+  form.addEventListener('change', (event) => {
+    if (event.target.name === 'webrtcSink') {
+      if (!webrtcSink.checked && appWebRTCSink) {
+        appWebRTCSink.destroy();
+        appWebRTCSink = null;
+      }
+    }
+    changeEventListener();
+  });
 
   document.querySelectorAll('input[name="renderer"]').forEach((radio) => {
     radio.addEventListener('change', changeEventListener);

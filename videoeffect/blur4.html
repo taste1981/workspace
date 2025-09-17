@@ -46,6 +46,9 @@
         <label style="font: 1em sans-serif; display: block; margin-bottom: 15px;">
           <input type="checkbox" name="fakeSegmentation" value="fakeSegmentation" id="fakeSegmentation" /> Fake CPU-based segmentation
         </label>
+        <label style="font: 1em sans-serif; display: block; margin-bottom: 15px;">
+          <input type="checkbox" name="webrtcSink" value="webrtcSink" id="webrtcSink" /> Use WebRTC sink
+        </label>
       </div>
       <div>
       <button id="startButton" style="padding: 10px 20px; font-size: 16px; background-color: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer;">
@@ -84,6 +87,7 @@
   <script src="webgl-renderer.js"></script>
   <script src="webgpu-renderer.js"></script>
   <script src="triangle-fake-segmenter.js"></script>
+  <script src="webrtc-sink.js"></script>
   <script src="blur4.js"></script>
 </body>
 
