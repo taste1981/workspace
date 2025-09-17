@@ -61,7 +61,6 @@ async function initializeBlurRenderer() {
 
       // Both renderers now output to a video element via MediaStreamTrackGenerator
       appProcessedVideo.style.display = 'block';
-      appCanvas.style.display = 'none';
 
     } catch (error) {
       console.warn(`Failed to initialize ${useWebGPU ? 'WebGPU' : 'WebGL2'} renderer:`, error);
@@ -70,9 +69,6 @@ async function initializeBlurRenderer() {
         appBlurRenderer = createWebGL2BlurRenderer(segmenterFunction);
         // The fallback should also use the video element path
         appProcessedVideo.style.display = 'block';
-        appCanvas.style.display = 'none';
-        // If for some reason we need to show the canvas, we can do this:
-        // appCanvas.style.display = 'block';
 
         if (appProcessedVideo) {
           appProcessedVideo.style.display = 'none';
@@ -197,14 +193,13 @@ const webgpuRadio = document.getElementById('webgpuRadio');
 const displaySizeSelect = document.getElementById('displaySize');
 const appStatus = document.getElementById('status');
 const appFpsDisplay = document.getElementById('fpsDisplay');
-const appVideo = document.getElementById('webcam');
 const appProcessedVideo = document.getElementById('processedVideo');
-const appCanvas = document.getElementById('output');
 const zeroCopyCheckbox = document.getElementById('zeroCopy');
 const zeroCopyLabel = document.getElementById('zeroCopyLabel');
 const directOutputCheckbox = document.getElementById('directOutput');
 const directOutputLabel = document.getElementById('directOutputLabel');
 const fakeSegmentationCheckbox = document.getElementById('fakeSegmentation');
+const videoContainer = document.getElementById('videoContainer');
 
 // Function to update URL from UI state
 function updateUrlFromUi() {
@@ -265,12 +260,8 @@ function updateDisplaySize() {
   }
   
   // Update video elements display size only - processing remains at full resolution
-  appVideo.style.width = width + 'px';
-  appVideo.style.height = height + 'px';
-  appProcessedVideo.style.width = width + 'px';
-  appProcessedVideo.style.height = height + 'px';
-  appCanvas.style.width = width + 'px';
-  appCanvas.style.height = height + 'px';
+  videoContainer.style.width = width + 'px';
+  videoContainer.style.height = height + 'px';
 }
 
 // Initialize compatibility info
@@ -293,17 +284,6 @@ async function startVideoProcessing() {
       video: { frameRate: { ideal: 30 }, width: 1280, height: 720 } 
     });
     
-    appVideo.srcObject = appStream;
-    await new Promise(r => appVideo.onloadedmetadata = r);
-    
-    // Wait until dimensions are available
-    await new Promise(res => {
-      const chk = () => (appVideo.videoWidth > 0) ? res() : setTimeout(chk, 50);
-      chk();
-    });
-    
-    appVideo.style.display = 'block';
-    appCanvas.style.display = 'block';
     appProcessedVideo.style.display = 'none';
     
     isRunning = true;
@@ -332,10 +312,6 @@ function stopVideoProcessing() {
   isRunning = false;
   
   // Stop any active streams
-  if (appVideo.srcObject) {
-    appVideo.srcObject.getTracks().forEach(t => t.stop());
-    appVideo.srcObject = null;
-  }
   if (appStream) {
     appStream.getTracks().forEach(t => t.stop());
     appStream = null;
