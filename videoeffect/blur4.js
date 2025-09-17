@@ -58,8 +58,6 @@ async function initializeBlurRenderer() {
       appStatus.innerText = 'Renderer: WebGL2';
       console.log('Using WebGL2 for blur rendering');
     }
-
-    // Both renderers now output to a video element via MediaStreamTrackGenerator
     appProcessedVideo.style.display = 'block';
 
   } catch (error) {
@@ -69,10 +67,6 @@ async function initializeBlurRenderer() {
       appBlurRenderer = createWebGL2BlurRenderer(segmenterFunction);
       // The fallback should also use the video element path
       appProcessedVideo.style.display = 'block';
-
-      if (appProcessedVideo) {
-        appProcessedVideo.style.display = 'none';
-      }
       appStatus.innerText = 'Renderer: WebGL2 (WebGPU fallback)';
       document.querySelector('input[name="renderer"][value="webgl2"]').checked = true;
     }
@@ -80,17 +74,7 @@ async function initializeBlurRenderer() {
 }
 
 async function processOneFrame(videoFrame) {
-  if (!appBlurRenderer) {
-    return null;
-  }
-
-  try {
-    // Render with blur effect
-    return await appBlurRenderer.render(videoFrame);
-  } catch (error) {
-    console.error("Error during frame processing in processOneFrame:", error);
-    return null;
-  }
+  return await appBlurRenderer.render(videoFrame);
 }
 
 async function run() {
@@ -111,15 +95,7 @@ async function run() {
   const trackGenerator = new MediaStreamTrackGenerator({ kind: 'video' });
   const writer = trackGenerator.writable.getWriter();
   const outputStream = new MediaStream([trackGenerator]);
-  if (outputStream && appProcessedVideo) {
-    appProcessedVideo.srcObject = outputStream;
-    // Also create the sink on startup if the checkbox is already checked.
-    if (webrtcSink.checked && !appWebRTCSink) {
-      const codec = document.getElementById('webrtcCodec').value;
-      appWebRTCSink = new WebRTCSink(codec);
-      appWebRTCSink.setMediaStream(outputStream);
-    }
-  }
+  appProcessedVideo.srcObject = outputStream;
 
   // Main processing loop
   async function processFrames() {
@@ -247,8 +223,6 @@ async function startVideoProcessing() {
     appStream = await navigator.mediaDevices.getUserMedia({
       video: { frameRate: { ideal: 30 }, width: 1280, height: 720 }
     });
-
-    appProcessedVideo.style.display = 'none';
 
     isRunning = true;
     startButton.style.display = 'none';
@@ -390,8 +364,8 @@ function loadSettingsFromUrl() {
   const form = document.getElementById('settings-form');
   const params = new URLSearchParams(location.hash.substring(1));
 
-  // IMPORTANT: Reset checkboxes first. Unchecked boxes are omitted from 
-  // the URL, so we must manually uncheck them before loading the "checked" ones.
+  // Reset checkboxes first. Unchecked boxes are omitted from the URL, so we
+  // must manually uncheck them before loading the "checked" ones.
   form.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false);
   for (const [key, value] of params.entries()) {
     const input = form.elements[key];
