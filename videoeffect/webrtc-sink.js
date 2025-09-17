@@ -25,6 +25,12 @@ class WebRTCSink {
     await this.negotiate();
   }
 
+  async renegotiate(newCodec) {
+    console.log(`WebRTCSink: renegotiating with new codec: ${newCodec}`);
+    this.codec = newCodec;
+    await this.negotiate();
+  }
+
   async negotiate() {
     try {
       // Prefer selected codec

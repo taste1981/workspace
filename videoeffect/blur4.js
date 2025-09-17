@@ -9,100 +9,100 @@ let rendererSwitchRequested = false;
 
 // Initialize CPU-only segmenter using MediaPipe
 async function initializeSegmenter() {
-    try {
-      // CPU-based segmentation using MediaPipe
-      segmenter = await bodySegmentation.createSegmenter(
-        bodySegmentation.SupportedModels.MediaPipeSelfieSegmentation,
-        {
-          runtime: 'mediapipe',
-          modelType: 'landscape',
-          solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation',
-        }
-      );
-      console.log('Using CPU (MediaPipe) for segmentation');
-      
-      // Update status to show segmentation method
-      const rendererType = document.querySelector('input[name="renderer"]:checked').value === 'webgpu' ? 'WebGPU' : 'WebGL2';
-      appStatus.innerText = `Segmentation: CPU (MediaPipe) | Renderer: ${rendererType}`;
-      
-    } catch (error) {
-      console.error('Failed to initialize CPU segmentation:', error);
-      appStatus.innerText = 'Segmentation initialization failed';
-    }
+  try {
+    // CPU-based segmentation using MediaPipe
+    segmenter = await bodySegmentation.createSegmenter(
+      bodySegmentation.SupportedModels.MediaPipeSelfieSegmentation,
+      {
+        runtime: 'mediapipe',
+        modelType: 'landscape',
+        solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation',
+      }
+    );
+    console.log('Using CPU (MediaPipe) for segmentation');
+
+    // Update status to show segmentation method
+    const rendererType = document.querySelector('input[name="renderer"]:checked').value === 'webgpu' ? 'WebGPU' : 'WebGL2';
+    appStatus.innerText = `Segmentation: CPU (MediaPipe) | Renderer: ${rendererType}`;
+
+  } catch (error) {
+    console.error('Failed to initialize CPU segmentation:', error);
+    appStatus.innerText = 'Segmentation initialization failed';
+  }
 }
 
 async function segmentMediapipe(downscaledImageData) {
-    const segmentation = await segmenter.segmentPeople(downscaledImageData);
-    if (!segmentation || segmentation.length === 0) {
-      console.warn("Segmentation returned no results.");
-      return null;
-    }
-    const maskImageData = await segmentation[0].mask.toImageData();
-    return maskImageData;
+  const segmentation = await segmenter.segmentPeople(downscaledImageData);
+  if (!segmentation || segmentation.length === 0) {
+    console.warn("Segmentation returned no results.");
+    return null;
+  }
+  const maskImageData = await segmentation[0].mask.toImageData();
+  return maskImageData;
 }
 
 // Initialize blur renderer based on radio buttons
 async function initializeBlurRenderer() {
-    const useWebGPU = document.querySelector('input[name="renderer"]:checked').value === 'webgpu';
+  const useWebGPU = document.querySelector('input[name="renderer"]:checked').value === 'webgpu';
   const segmenterFunction = fakeSegmentationCheckbox.checked ? createBlurryTriangleMask : segmentMediapipe;
 
-    try {
-      if (useWebGPU && 'gpu' in navigator) {
-        const zeroCopy = zeroCopyCheckbox.checked;
-        const directOutput = directOutputCheckbox.checked;
-        appBlurRenderer = await createWebGPUBlurRenderer(segmenterFunction, zeroCopy, directOutput);
-        appStatus.innerText = 'Renderer: WebGPU';
-        console.log('Using WebGPU for blur rendering');
-      } else {
-        appBlurRenderer = createWebGL2BlurRenderer(segmenterFunction);
-        appStatus.innerText = 'Renderer: WebGL2';
-        console.log('Using WebGL2 for blur rendering');
-      }
+  try {
+    if (useWebGPU && 'gpu' in navigator) {
+      const zeroCopy = zeroCopyCheckbox.checked;
+      const directOutput = directOutputCheckbox.checked;
+      appBlurRenderer = await createWebGPUBlurRenderer(segmenterFunction, zeroCopy, directOutput);
+      appStatus.innerText = 'Renderer: WebGPU';
+      console.log('Using WebGPU for blur rendering');
+    } else {
+      appBlurRenderer = createWebGL2BlurRenderer(segmenterFunction);
+      appStatus.innerText = 'Renderer: WebGL2';
+      console.log('Using WebGL2 for blur rendering');
+    }
 
-      // Both renderers now output to a video element via MediaStreamTrackGenerator
+    // Both renderers now output to a video element via MediaStreamTrackGenerator
+    appProcessedVideo.style.display = 'block';
+
+  } catch (error) {
+    console.warn(`Failed to initialize ${useWebGPU ? 'WebGPU' : 'WebGL2'} renderer:`, error);
+    // Fallback to WebGL2 if WebGPU fails
+    if (useWebGPU) {
+      appBlurRenderer = createWebGL2BlurRenderer(segmenterFunction);
+      // The fallback should also use the video element path
       appProcessedVideo.style.display = 'block';
 
-    } catch (error) {
-      console.warn(`Failed to initialize ${useWebGPU ? 'WebGPU' : 'WebGL2'} renderer:`, error);
-      // Fallback to WebGL2 if WebGPU fails
-      if (useWebGPU) {
-        appBlurRenderer = createWebGL2BlurRenderer(segmenterFunction);
-        // The fallback should also use the video element path
-        appProcessedVideo.style.display = 'block';
-
-        if (appProcessedVideo) {
-          appProcessedVideo.style.display = 'none';
-        }
-        appStatus.innerText = 'Renderer: WebGL2 (WebGPU fallback)';
-        document.querySelector('input[name="renderer"][value="webgl2"]').checked = true;
+      if (appProcessedVideo) {
+        appProcessedVideo.style.display = 'none';
       }
+      appStatus.innerText = 'Renderer: WebGL2 (WebGPU fallback)';
+      document.querySelector('input[name="renderer"][value="webgl2"]').checked = true;
     }
+  }
 }
 
 async function processOneFrame(videoFrame) {
-    if (!appBlurRenderer) {
-        return null;
-    }
+  if (!appBlurRenderer) {
+    return null;
+  }
 
-    try {
-        // Render with blur effect
-        return await appBlurRenderer.render(videoFrame);
-    } catch (error) {
-        console.error("Error during frame processing in processOneFrame:", error);
-        return null;
-    }
+  try {
+    // Render with blur effect
+    return await appBlurRenderer.render(videoFrame);
+  } catch (error) {
+    console.error("Error during frame processing in processOneFrame:", error);
+    return null;
+  }
 }
 
 async function run() {
   appStartRun = performance.now();
   appCount = 0;
   appSegmentTimes.length = 0;
-  
+
   // FPS tracking variables
   let frameCount = 0;
   let lastFpsTime = performance.now();
   let actualFps = 0;
-  
+
   // Centralized frame processing setup
   const videoTrack = appStream.getVideoTracks()[0];
   const trackProcessor = new MediaStreamTrackProcessor({ track: videoTrack });
@@ -113,6 +113,7 @@ async function run() {
   const outputStream = new MediaStream([trackGenerator]);
   if (outputStream && appProcessedVideo) {
     appProcessedVideo.srcObject = outputStream;
+    // Also create the sink on startup if the checkbox is already checked.
     if (webrtcSink.checked && !appWebRTCSink) {
       const codec = document.getElementById('webrtcCodec').value;
       appWebRTCSink = new WebRTCSink(codec);
@@ -158,18 +159,12 @@ async function run() {
       }
 
       const processedFrame = await processOneFrame(frame);
+      frame.close();
 
       if (processedFrame) {
-          try {
-            await writer.write(processedFrame);
-          } catch (e) {
-            console.error('Error writing frame to generator', e);
-          }
-          processedFrame.close();
+        await writer.write(processedFrame);
+        processedFrame.close();
       }
-
-      // IMPORTANT: Close the frame to free up resources.
-      frame.close();
     }
   }
 
@@ -211,52 +206,6 @@ const webrtcCodecLabel = document.getElementById('webrtcCodecLabel');
 const videoContainer = document.getElementById('videoContainer');
 
 // Function to update URL from UI state
-function updateUrlFromUi() {
-  const form = document.getElementById('settings-form');
-
-  // When ANY input inside the form changes...
-  form.addEventListener('change', () => {
-    // 1. Get ALL current UI values instantly using FormData
-    const formData = new FormData(form);
-
-    // 2. FormData serializes directly into URLSearchParams
-    const params = new URLSearchParams(formData);
-
-    // 3. Update the URL hash (avoids page reload)
-    // Use history.replaceState to avoid polluting browser history on every click
-    history.replaceState(null, '', '#' + params.toString());
-  });
-}
-
-// Function to update UI from URL parameters on page load
-function updateUiFromUrl() {
-  const params = new URLSearchParams(location.hash.substring(1));
-
-  const renderer = params.get('renderer');
-  if (renderer) {
-    const radio = document.querySelector(`input[name="renderer"][value="${renderer}"]`);
-    if (radio) radio.checked = true;
-  }
-
-  // Only check these if WebGPU is the selected renderer
-  if (document.querySelector('input[name="renderer"]:checked').value === 'webgpu') {
-      zeroCopyCheckbox.checked = params.get('zeroCopy') === 'true';
-      directOutputCheckbox.checked = params.get('directOutput') === 'true';
-  }
-
-  fakeSegmentationCheckbox.checked = params.get('fakeSegmentation') === 'true';
-  webrtcSink.checked = params.get('webrtcSink') === 'true';
-
-  const codec = params.get('webrtcCodec');
-  if (codec) {
-    webrtcCodec.value = codec;
-  }
-
-  const displaySize = params.get('displaySize');
-  if (displaySize) {
-    displaySizeSelect.value = displaySize;
-  }
-}
 
 // Check browser compatibility
 const hasWebGPU = 'gpu' in navigator;
@@ -265,7 +214,7 @@ const hasWebGPU = 'gpu' in navigator;
 function updateDisplaySize() {
   const size = displaySizeSelect.value;
   let width, height;
-  
+
   if (size === 'small') {
     width = 320;
     height = 180;
@@ -273,7 +222,7 @@ function updateDisplaySize() {
     width = 1280;
     height = 720;
   }
-  
+
   // Update video elements display size only - processing remains at full resolution
   videoContainer.style.width = width + 'px';
   videoContainer.style.height = height + 'px';
@@ -293,23 +242,23 @@ async function startVideoProcessing() {
     startButton.disabled = true;
     startButton.textContent = 'Starting...';
     appStatus.textContent = 'Initializing...';
-    
+
     appStatus.textContent = 'Requesting camera access...';
-    appStream = await navigator.mediaDevices.getUserMedia({ 
-      video: { frameRate: { ideal: 30 }, width: 1280, height: 720 } 
+    appStream = await navigator.mediaDevices.getUserMedia({
+      video: { frameRate: { ideal: 30 }, width: 1280, height: 720 }
     });
-    
+
     appProcessedVideo.style.display = 'none';
-    
+
     isRunning = true;
     startButton.style.display = 'none';
     stopButton.style.display = 'inline-block';
-    
+
     // Now run the video processing
     await initializeSegmenter();
     await initializeBlurRenderer();
     await run();
-    
+
   } catch (error) {
     console.error('Failed to start video processing:', error);
     appStatus.textContent = 'Error: ' + error.message;
@@ -325,7 +274,7 @@ async function startVideoProcessing() {
 function stopVideoProcessing() {
   if (!isRunning) return;
   isRunning = false;
-  
+
   // Stop any active streams
   if (appStream) {
     appStream.getTracks().forEach(t => t.stop());
@@ -333,12 +282,17 @@ function stopVideoProcessing() {
   }
 
   if (appReader) {
-    appReader.cancel().catch(() => {}); // Ignore cancel errors
+    appReader.cancel().catch(() => { }); // Ignore cancel errors
     appReader = null;
   }
 
+  if (appWebRTCSink) {
+    appWebRTCSink.destroy();
+    appWebRTCSink = null;
+  }
+
   appBlurRenderer = null;
-  
+
   startButton.disabled = false;
   startButton.textContent = 'Start Video Processing';
   startButton.style.display = 'inline-block';
@@ -360,9 +314,6 @@ function updateOptionState() {
 };
 
 async function initializeApp() {
-  // Set initial UI state from URL before doing anything else
-  updateUiFromUrl();
-
   // Populate WebRTC codec options
   if (RTCRtpSender.getCapabilities) {
     const capabilities = RTCRtpSender.getCapabilities('video');
@@ -380,45 +331,62 @@ async function initializeApp() {
   }
 
   initializeCompatibilityInfo();
-  
-  // Set initial display size
-  updateDisplaySize();
-  
+
   startButton.addEventListener('click', startVideoProcessing);
   stopButton.addEventListener('click', stopVideoProcessing);
-  
-  displaySizeSelect.addEventListener('change', () => {
-    updateUrlFromUi();
-    updateOptionState();
-    updateDisplaySize();
-  });
 
-  const changeEventListener = () => {
-    updateOptionState();
-    updateUrlFromUi();
-    if (isRunning) rendererSwitchRequested = true;
-  };
+  const form = document.getElementById('settings-form');
   form.addEventListener('change', (event) => {
+    // Update URL from all form data
+    const formData = new FormData(form);
+    const params = new URLSearchParams(formData);
+    history.replaceState(null, '', '#' + params.toString());
+
+    // Handle specific UI updates or actions based on what changed
+    if (event.target.name === 'displaySize') {
+      updateDisplaySize();
+    }
+
     if (event.target.name === 'webrtcSink') {
       if (!webrtcSink.checked && appWebRTCSink) {
         appWebRTCSink.destroy();
         appWebRTCSink = null;
       }
+      if (webrtcSink.checked && isRunning && !appWebRTCSink) {
+        const codec = document.getElementById('webrtcCodec').value;
+        appWebRTCSink = new WebRTCSink(codec);
+        // The output stream is on the video element's srcObject
+        appWebRTCSink.setMediaStream(appProcessedVideo.srcObject);
+      }
     }
-    changeEventListener();
+
+    if (event.target.name === 'webrtcCodec' && isRunning && appWebRTCSink) {
+      const newCodec = document.getElementById('webrtcCodec').value;
+      appWebRTCSink.renegotiate(newCodec);
+    }
+
+    // Update enabled/disabled/visible states of options
+    updateOptionState();
+
+    // If the app is running, request a restart to apply changes
+    if (isRunning && event.target.name !== 'displaySize') {
+      rendererSwitchRequested = true;
+    }
   });
 
-  document.querySelectorAll('input[name="renderer"]').forEach((radio) => {
-    radio.addEventListener('change', changeEventListener);
-  });
+  // Load settings from URL on initial load and when the hash changes
+  window.addEventListener('load', loadSettingsFromUrl);
+  window.addEventListener('hashchange', loadSettingsFromUrl);
 
-  updateOptionState();
+  // Manually trigger loading for the initial state
+  loadSettingsFromUrl();
 }
 
 // Initialize the app
 initializeApp();
 
 function loadSettingsFromUrl() {
+  // This function now also handles the initial UI setup like display size.
   const form = document.getElementById('settings-form');
   const params = new URLSearchParams(location.hash.substring(1));
 
@@ -426,7 +394,7 @@ function loadSettingsFromUrl() {
   // the URL, so we must manually uncheck them before loading the "checked" ones.
   form.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false);
   for (const [key, value] of params.entries()) {
-    const input = form.elements[key]; 
+    const input = form.elements[key];
 
     if (!input) continue; // Skip params that don't match a setting
 
@@ -440,8 +408,7 @@ function loadSettingsFromUrl() {
       input.value = value;
     }
   }
+  // After loading settings, update the dependent UI state
   updateOptionState();
+  updateDisplaySize();
 }
-
-window.addEventListener('load', loadSettingsFromUrl);
-window.addEventListener('hashchange', loadSettingsFromUrl);
