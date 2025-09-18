@@ -1,3 +1,5 @@
+let cachedImageData;
+
 async function createBlurryTriangleMask(inputImageData) {
   function sub(v1, v2) {
     return { x: v1.x - v2.x, y: v1.y - v2.y };
@@ -66,12 +68,14 @@ async function createBlurryTriangleMask(inputImageData) {
 
     return isInside ? -dist : dist;
   }
-
   const width = inputImageData.width;
   const height = inputImageData.height;
 
   // Create a new ImageData object for the output mask.
-  const outputMaskData = new ImageData(width, height);
+  const outputMaskData = cachedImageData ?
+    cachedImageData : new ImageData(width, height);
+  cachedImageData = outputMaskData;
+
   const outData = outputMaskData.data; // This is a Uint8ClampedArray
 
   // Define the triangle vertices (ensure they are Counter-Clockwise)
