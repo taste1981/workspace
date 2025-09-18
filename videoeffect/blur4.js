@@ -77,80 +77,107 @@ async function processOneFrame(videoFrame) {
   return await appBlurRenderer.render(videoFrame);
 }
 
+// Main processing loop
+async function processFrames(readable, writable, onFpsUpdate) {
+  const reader = readable.getReader();
+  appReader = reader;
+  const writer = writable.getWriter();
+
+  // FPS tracking variables
+  let frameCount = 0;
+  let lastFpsTime = performance.now();
+
+  while (isRunning) {
+    const result = await reader.read();
+    if (result.done) {
+      console.log("Stream has ended.");
+      reader.releaseLock();
+      writer.close();
+      break;
+    }
+    const frame = result.value;
+
+    // FPS calculation
+    frameCount++;
+    const currentTime = performance.now();
+    const deltaTime = currentTime - lastFpsTime;
+    if (deltaTime >= 1000) {
+      const actualFps = (frameCount * 1000) / deltaTime;
+      onFpsUpdate(actualFps.toFixed(1));
+      frameCount = 0;
+      lastFpsTime = currentTime;
+    }
+
+    const processedFrame = await processOneFrame(frame);
+    frame.close();
+    await writer.write(processedFrame);
+    processedFrame.close();
+  }
+}
+
+async function runInWorker(trackProcessor, trackGenerator) {
+  return new Promise((resolve) => {
+    const worker = new Worker('blur-worker.js');
+    appWorker = worker; // Store worker instance for termination
+
+    const onFpsUpdate = (fps) => {
+      appFpsDisplay.textContent = `FPS: ${fps}`;
+    };
+
+    worker.onmessage = (event) => {
+      if (event.data.type === 'ready') {
+        console.log('Worker is ready and processing.');
+        resolve();
+      } else if (event.data.type === 'fpsUpdate') {
+        onFpsUpdate(event.data.fps);
+      }
+    };
+
+    const zeroCopyCheckbox = document.getElementById('zeroCopy');
+    const directOutputCheckbox = document.getElementById('directOutput');
+    const options = {
+      useWebGPU: document.querySelector('input[name="renderer"]:checked').value === 'webgpu',
+      useFakeSegmentation: fakeSegmentationCheckbox.checked,
+      zeroCopy: zeroCopyCheckbox ? zeroCopyCheckbox.checked : false,
+      directOutput: directOutputCheckbox ? directOutputCheckbox.checked : false,
+    };
+
+    // Transfer the readable and writable streams to the worker for zero-copy data handling.
+    worker.postMessage({
+      type: 'start',
+      readable: trackProcessor.readable,
+      writable: trackGenerator.writable,
+      options: options
+    }, [trackProcessor.readable, trackGenerator.writable]);
+  });
+}
+
 async function run() {
   appStartRun = performance.now();
   appCount = 0;
   appSegmentTimes.length = 0;
 
-  // FPS tracking variables
-  let frameCount = 0;
-  let lastFpsTime = performance.now();
-  let actualFps = 0;
-
-  // Centralized frame processing setup
   const videoTrack = appStream.getVideoTracks()[0];
   const trackProcessor = new MediaStreamTrackProcessor({ track: videoTrack });
-  appReader = trackProcessor.readable.getReader();
-
   const trackGenerator = new MediaStreamTrackGenerator({ kind: 'video' });
-  const writer = trackGenerator.writable.getWriter();
-  const outputStream = new MediaStream([trackGenerator]);
-  appProcessedVideo.srcObject = outputStream;
 
-  // Main processing loop
-  async function processFrames() {
-    while (isRunning) {
-      if (rendererSwitchRequested) {
-        rendererSwitchRequested = false;
-        appStatus.innerText = 'Switching renderer...';
-        await initializeBlurRenderer();
-        const rendererType = document.querySelector('input[name="renderer"]:checked').value === 'webgpu' ? 'WebGPU' : 'WebGL2';
-        appStatus.innerText = `Segmentation: CPU (MediaPipe) | Renderer: ${rendererType}`;
-        // Reset counters
-        appCount = 0;
-        appSegmentTimes.length = 0;
-        frameCount = 0;
-        lastFpsTime = performance.now();
-        appFpsDisplay.textContent = `FPS: --`;
+  if (useWorkerCheckbox.checked) {
+    await runInWorker(trackProcessor, trackGenerator); // This now waits for the worker
+    appProcessedVideo.srcObject = new MediaStream([trackGenerator]);
+    appProcessedVideo.style.display = 'block';
+  } else {
+    // Fallback to main thread processing
+    await initializeSegmenter();
+    await initializeBlurRenderer();
+    const onFpsUpdate = (fps) => { appFpsDisplay.textContent = `FPS: ${fps}`; };
+    processFrames(trackProcessor.readable, trackGenerator.writable, onFpsUpdate).catch(e => {
+      if (isRunning) {
+        console.error("Error in processing loop:", e);
+        stopVideoProcessing();
       }
-
-      const result = await appReader.read();
-      if (result.done) {
-        console.log("Stream has ended.");
-        appReader.releaseLock();
-        writer.close();
-        break;
-      }
-      const frame = result.value;
-
-      // FPS calculation
-      frameCount++;
-      const currentTime = performance.now();
-      const deltaTime = currentTime - lastFpsTime;
-      if (deltaTime >= 1000) {
-        actualFps = (frameCount * 1000) / deltaTime;
-        appFpsDisplay.textContent = `FPS: ${actualFps.toFixed(1)}`;
-        frameCount = 0;
-        lastFpsTime = currentTime;
-      }
-
-      const processedFrame = await processOneFrame(frame);
-      frame.close();
-
-      if (processedFrame) {
-        await writer.write(processedFrame);
-        processedFrame.close();
-      }
-    }
+    });
+    appProcessedVideo.srcObject = new MediaStream([trackGenerator]);
   }
-
-  // Start the processing loop
-  processFrames().catch(e => {
-    if (isRunning) { // Only log error if we weren't intentionally stopped
-      console.error("Error in processing loop:", e);
-      stopVideoProcessing();
-    }
-  });
 }
 
 // Global variables for app state
@@ -161,6 +188,7 @@ let appBlurRenderer = null;
 let appStream = null;
 let isRunning = false;
 let appReader = null;
+let appWorker = null;
 let appWebRTCSink = null;
 
 // Get DOM elements for app control
@@ -179,6 +207,7 @@ const fakeSegmentationCheckbox = document.getElementById('fakeSegmentation');
 const webrtcSink = document.getElementById('webrtcSink');
 const webrtcCodec = document.getElementById('webrtcCodec');
 const webrtcCodecLabel = document.getElementById('webrtcCodecLabel');
+const useWorkerCheckbox = document.getElementById('useWorker');
 const videoContainer = document.getElementById('videoContainer');
 
 // Function to update URL from UI state
@@ -204,14 +233,6 @@ function updateDisplaySize() {
   videoContainer.style.height = height + 'px';
 }
 
-// Initialize compatibility info
-function initializeCompatibilityInfo() {
-  if (!hasWebGPU) {
-    webgpuRadio.disabled = true;
-    webgpuRadio.parentElement.innerHTML = '<input type="radio" name="renderer" value="webgpu" disabled /> WebGPU (Not supported in this browser)';
-  }
-}
-
 async function startVideoProcessing() {
   if (isRunning) return;
   try {
@@ -219,18 +240,16 @@ async function startVideoProcessing() {
     startButton.textContent = 'Starting...';
     appStatus.textContent = 'Initializing...';
 
-    appStatus.textContent = 'Requesting camera access...';
-    appStream = await navigator.mediaDevices.getUserMedia({
-      video: { frameRate: { ideal: 30 }, width: 1280, height: 720 }
-    });
+    if (!appStream) {
+      appStatus.textContent = 'Requesting camera access...';
+      appStream = await navigator.mediaDevices.getUserMedia({ video: { frameRate: { ideal: 30 }, width: 1280, height: 720 } });
+    }
 
     isRunning = true;
-    startButton.style.display = 'none';
+    startButton.textContent = 'Start Video Processing'; // Reset text in case it was 'Starting...'
     stopButton.style.display = 'inline-block';
 
     // Now run the video processing
-    await initializeSegmenter();
-    await initializeBlurRenderer();
     await run();
 
   } catch (error) {
@@ -249,10 +268,10 @@ function stopVideoProcessing() {
   if (!isRunning) return;
   isRunning = false;
 
-  // Stop any active streams
-  if (appStream) {
-    appStream.getTracks().forEach(t => t.stop());
-    appStream = null;
+  if (appWorker) {
+    appWorker.postMessage({ type: 'stop' });
+    appWorker.terminate();
+    appWorker = null;
   }
 
   if (appReader) {
@@ -260,15 +279,9 @@ function stopVideoProcessing() {
     appReader = null;
   }
 
-  if (appWebRTCSink) {
-    appWebRTCSink.destroy();
-    appWebRTCSink = null;
-  }
-
   appBlurRenderer = null;
 
   startButton.disabled = false;
-  startButton.textContent = 'Start Video Processing';
   startButton.style.display = 'inline-block';
   stopButton.style.display = 'none';
   appStatus.textContent = 'Stopped. You can start again.';
@@ -304,10 +317,30 @@ async function initializeApp() {
     }
   }
 
-  initializeCompatibilityInfo();
+  if (!hasWebGPU) {
+    webgpuRadio.disabled = true;
+    webgpuRadio.parentElement.innerHTML = '<input type="radio" name="renderer" value="webgpu" disabled /> WebGPU (Not supported in this browser)';
+  }
 
-  startButton.addEventListener('click', startVideoProcessing);
-  stopButton.addEventListener('click', stopVideoProcessing);
+  startButton.addEventListener('click', async () => {
+    await startVideoProcessing();
+    if (webrtcSink.checked) {
+      appWebRTCSink = new WebRTCSink(webrtcCodec.value);
+      appWebRTCSink.setMediaStream(appProcessedVideo.srcObject);
+    }
+  });
+  stopButton.addEventListener('click', () => {
+    // This is the explicit user "Stop" action.
+    stopVideoProcessing();
+    if (appStream) {
+      appStream.getTracks().forEach(t => t.stop());
+      appStream = null;
+    }
+    if (appWebRTCSink) {
+      appWebRTCSink.destroy();
+      appWebRTCSink = null;
+    }
+  });
 
   const form = document.getElementById('settings-form');
   form.addEventListener('change', (event) => {
@@ -327,28 +360,27 @@ async function initializeApp() {
         appWebRTCSink = null;
       }
       if (webrtcSink.checked && isRunning && !appWebRTCSink) {
-        const codec = document.getElementById('webrtcCodec').value;
-        appWebRTCSink = new WebRTCSink(codec);
-        // The output stream is on the video element's srcObject
+        appWebRTCSink = new WebRTCSink(webrtcCodec.value);
         appWebRTCSink.setMediaStream(appProcessedVideo.srcObject);
       }
     }
 
     if (event.target.name === 'webrtcCodec' && isRunning && appWebRTCSink) {
-      const newCodec = document.getElementById('webrtcCodec').value;
-      appWebRTCSink.renegotiate(newCodec);
+      appWebRTCSink.renegotiate(webrtcCodec.value);
     }
 
     // Update enabled/disabled/visible states of options
     updateOptionState();
 
-    // If the app is running, request a restart to apply changes
-    if (isRunning && event.target.name !== 'displaySize') {
-      rendererSwitchRequested = true;
+    // If the app is running, and a core pipeline option changed, restart the pipeline.
+    const restartNeededOptions = ['renderer', 'useWorker', 'fakeSegmentation', 'zeroCopy', 'directOutput'];
+    if (isRunning && restartNeededOptions.includes(event.target.name)) {
+      console.log(`Restarting pipeline due to change in '${event.target.name}'`);
+      stopVideoProcessing();
+      startVideoProcessing();
     }
   });
 
-  // Load settings from URL on initial load and when the hash changes
   window.addEventListener('load', loadSettingsFromUrl);
   window.addEventListener('hashchange', loadSettingsFromUrl);
 
