@@ -54,7 +54,7 @@ async function initializeBlurRenderer() {
       appStatus.innerText = 'Renderer: WebGPU';
       console.log('Using WebGPU for blur rendering');
     } else {
-      appBlurRenderer = createWebGL2BlurRenderer(segmenterFunction);
+      appBlurRenderer = await createWebGL2BlurRenderer(segmenterFunction);
       appStatus.innerText = 'Renderer: WebGL2';
       console.log('Using WebGL2 for blur rendering');
     }
@@ -64,7 +64,7 @@ async function initializeBlurRenderer() {
     console.warn(`Failed to initialize ${useWebGPU ? 'WebGPU' : 'WebGL2'} renderer:`, error);
     // Fallback to WebGL2 if WebGPU fails
     if (useWebGPU) {
-      appBlurRenderer = createWebGL2BlurRenderer(segmenterFunction);
+      appBlurRenderer = await createWebGL2BlurRenderer(segmenterFunction);
       // The fallback should also use the video element path
       appProcessedVideo.style.display = 'block';
       appStatus.innerText = 'Renderer: WebGL2 (WebGPU fallback)';
