@@ -102,8 +102,14 @@ async function renderWithWebGPU(params, videoFrame, resourceCache) {
     );
     device.queue.submit([commandEncoder.finish()]);
     await readbackBuffer.mapAsync(GPUMapMode.READ);
-    const pixelData = new Uint8Array(readbackBuffer.getMappedRange().slice(0));
-    const downscaledImageData = new ImageData(new Uint8ClampedArray(pixelData.buffer), segmentationWidth, segmentationHeight);
+
+    const mappedRange = readbackBuffer.getMappedRange();
+    const pixelData = new Uint8ClampedArray(
+      mappedRange,
+      0,
+      segmentationWidth * segmentationHeight * 4
+    );
+    const downscaledImageData = new ImageData(pixelData, segmentationWidth, segmentationHeight);
     readbackBuffer.unmap();
 
     // Segment
