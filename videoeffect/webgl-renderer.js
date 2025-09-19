@@ -82,10 +82,12 @@ function renderWithWebGL2(gl, program, videoFrame, maskImageData, resources) {
 }
 
 // WebGL2 blur renderer
-async function createWebGL2BlurRenderer(segmenterFunction) {
+function createWebGL2BlurRenderer(segmenterFunction) {
     // Create a separate canvas for WebGL2 processing at full resolution
-    const webglCanvas = new OffscreenCanvas(1280, 720);
+    const webglCanvas = document.createElement('canvas');
     // Always use full video resolution for processing, regardless of display size
+    webglCanvas.width = 1280;
+    webglCanvas.height = 720;
     
     const gl = webglCanvas.getContext('webgl2');
     if (!gl) throw new Error('WebGL2 not supported');
