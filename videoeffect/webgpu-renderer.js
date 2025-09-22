@@ -31,6 +31,8 @@ function getOrCreateTexture(device, cache, key, size, directOutput, usage) {
   return texture;
 }
 
+let imageDataCache;
+
 async function renderWithWebGPU(params, videoFrame, resourceCache) {
   const device = params.device;
   const webgpuCanvas = params.webgpuCanvas;
@@ -102,14 +104,10 @@ async function renderWithWebGPU(params, videoFrame, resourceCache) {
     );
     device.queue.submit([commandEncoder.finish()]);
     await readbackBuffer.mapAsync(GPUMapMode.READ);
-
-    const mappedRange = readbackBuffer.getMappedRange();
-    const pixelData = new Uint8ClampedArray(
-      mappedRange,
-      0,
-      segmentationWidth * segmentationHeight * 4
-    );
-    const downscaledImageData = new ImageData(pixelData, segmentationWidth, segmentationHeight);
+    const downscaledImageData = imageDataCache ?
+      imageDataCache :
+      new ImageData(segmentationWidth, segmentationHeight);
+    downscaledImageData.data.set(new Uint8Array(readbackBuffer.getMappedRange()));
     readbackBuffer.unmap();
 
     // Segment
