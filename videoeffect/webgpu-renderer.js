@@ -316,54 +316,90 @@ async function createWebGPUBlurRenderer(segmenter, zeroCopy, directOutput) {
       @group(0) @binding(1) var maskTexture: texture_2d<f32>;
       @group(0) @binding(2) var outputTexture: texture_storage_2d<${getTextureFormat(directOutput)}, write>;
       @group(0) @binding(3) var textureSampler: sampler;
-      
+
       struct Uniforms {
         resolution: vec2<f32>,
         blurAmount: f32,
       };
       @group(0) @binding(4) var<uniform> uniforms: Uniforms;
-      
+      // SLM Declaration: A 16x16 tile to cache the texture samples.
+      var<workgroup> tile: array<array<vec4<f32>, 16>, 16>;
+
       @compute @workgroup_size(8, 8)
-      fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+      fn main(
+        @builtin(global_invocation_id) global_id: vec3<u32>,
+        @builtin(local_invocation_id) local_id: vec3<u32>
+      ) {
         let inputDims = textureDimensions(inputTexture);
-        let maskDims = textureDimensions(maskTexture);
-        
+
+        // Each invocation will calculate 4 of the 256 total samples needed by the workgroup.
+        // We use the local_id to determine which 2x2 block of the 16x16 tile to fill.
+
+        // ***************************
+        // NOTE: The below code is flawed because this algorithm is a gather blur algorithm.
+        // The algorithm below the barrier assumes that the SLM cache yields the same result
+        // for pixel uv(100, 100) + offset(1, 0) as it would for uv(101, 100) + offset(0, 0)
+        // which isn't the case when blurAmount != 1.0. With blurAmount = 6.0 it gives
+        // a not unpleasing "tiled blur" effect!
+        //
+        // Despite this "flaw", it serves as an example to show that power consumption is drastically
+        // reduced under texture_external, proving that texture_external ALU ops are a problem for
+        // shaders with large filters.
+        // ***************************
+
+        for (var i = 0; i < 2; i++) {
+          for (var j = 0; j < 2; j++) {
+            let slmCoordX = local_id.x * 2u + u32(j);
+            let slmCoordY = local_id.y * 2u + u32(i);
+            let kernelOffset = vec2<i32>(i32(slmCoordX), i32(slmCoordY)) -
+                vec2<i32>(local_id.xy) - vec2<i32>(4, 4);
+
+            let base_uv = (vec2<f32>(global_id.xy) + 0.5) / vec2<f32>(inputDims);
+            let offset = vec2<f32>(kernelOffset) * uniforms.blurAmount / uniforms.resolution;
+
+            // Perform the single expensive sample and store its result in the cache.
+            tile[slmCoordY][slmCoordX] = textureSampleBaseClampToEdge(inputTexture, textureSampler, base_uv + offset);
+          }
+        }
+        workgroupBarrier();
+
         if (global_id.x >= inputDims.x || global_id.y >= inputDims.y) {
           return;
         }
-        
+
         let coord = vec2<i32>(i32(global_id.x), i32(global_id.y));
         let uv = (vec2<f32>(coord) + 0.5) / vec2<f32>(inputDims);
-        
+
+        // We still need one sample for the original color to mix with.
         let originalColor = textureSampleBaseClampToEdge(inputTexture, textureSampler, uv);
-        
-        // Calculate corresponding mask coordinate (handle different dimensions)
-        let maskCoord = vec2<i32>(
-          i32(uv.x * f32(maskDims.x)),
-          i32(uv.y * f32(maskDims.y))
-        );
+
+        let maskDims = textureDimensions(maskTexture);
+        let maskCoord = vec2<i32>(uv * vec2<f32>(maskDims));
         let mask = textureLoad(maskTexture, maskCoord, 0).${directOutput ? "b" : "r"};
-        
+
         // Calculate blurred color for the background
         var blurredColor = vec4<f32>(0.0);
         var totalWeight = 0.0;
-        
+
         // Use 9x9 kernel like WebGL2 (from -4 to +4)
         for (var x = -4; x <= 4; x++) {
           for (var y = -4; y <= 4; y++) {
-            let offset = vec2<f32>(f32(x), f32(y)) * uniforms.blurAmount / uniforms.resolution;
             let weight = 1.0 / (1.0 + length(vec2<f32>(f32(x), f32(y))));
-            blurredColor += textureSampleBaseClampToEdge(inputTexture, textureSampler, uv + offset) * weight;
+
+            // Calculate the integer coordinate to read from the SLM tile.
+            let slmReadCoord = vec2<i32>(local_id.xy) + vec2<i32>(4, 4) + vec2<i32>(x, y);
+
+            // This is now a fast read from local memory.
+            blurredColor += tile[u32(slmReadCoord.y)][u32(slmReadCoord.x)] * weight;
             totalWeight += weight;
           }
         }
         if (totalWeight > 0.0) {
             blurredColor /= totalWeight;
         }
-        
+
         // Mix original and blurred colors based on the mask.
         let finalColor = mix(blurredColor, originalColor, mask);
-        
         textureStore(outputTexture, coord, finalColor);
       }
     `;
