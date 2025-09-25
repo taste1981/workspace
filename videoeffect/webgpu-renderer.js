@@ -243,7 +243,7 @@ async function renderWithWebGPU(params, videoFrame, resourceCache) {
 }
 
 // WebGPU blur renderer
-async function createWebGPUBlurRenderer(segmenter, zeroCopy, directOutput) {
+export async function createWebGPUBlurRenderer(segmenter, zeroCopy, directOutput) {
   console.log("createWebGPUBlurRenderer zeroCopy: ", zeroCopy, " directOutput: ", directOutput);
   // Always use full resolution for processing, regardless of display size
   const webgpuCanvas = new OffscreenCanvas(1280, 720);

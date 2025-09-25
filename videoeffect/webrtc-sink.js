@@ -1,4 +1,4 @@
-class WebRTCSink {
+export class WebRTCSink {
   constructor(codec) {
     this.codec = codec;
     this.remoteVideo = document.createElement('video');
