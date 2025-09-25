@@ -17,6 +17,12 @@
     canvas {
       z-index: 1;
     }
+
+    label {
+      font: 1em sans-serif;
+      display: block;
+      margin-bottom: 10px;
+    }
   </style>
 </head>
 
@@ -28,31 +34,43 @@
     <div style="margin-bottom: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9; width: 600px;">
       <h3 style="margin-top: 0;">Renderer Selection</h3>
       <div>
-      <label style="font: 1em sans-serif; display: block; margin-bottom: 10px;">
+      <label>
         <input type="radio" name="renderer" value="webgl2" checked /> WebGL2 (Compatible)
       </label>
-      <label style="font: 1em sans-serif; display: block; margin-bottom: 15px;">
+      <label>
         <input type="radio" name="renderer" value="webgpu" id="webgpuRadio" /> WebGPU (Advanced, requires compatible browser)
       </label>
-      <label style="font: 1em sans-serif; display: block; margin-bottom: 10px; padding-left: 20px;" id="zeroCopyLabel">
+      <label style="padding-left: 20px;" id="zeroCopyLabel">
         <input type="checkbox" id="zeroCopy" name="zeroCopy" unchecked /> Zero-copy import
       </label>
-      <label style="font: 1em sans-serif; display: block; margin-bottom: 10px; padding-left: 20px;" id="directOutputLabel">
+      <label style="padding-left: 20px;" id="directOutputLabel">
         <input type="checkbox" id="directOutput" name="directOutput" unchecked /> Zero-copy output
       </label>
-      <label style="font: 1em sans-serif; display: block; margin-bottom: 10px;">
+      <label>
         <input type="checkbox" id="useWorker" name="useWorker" value="true" /> Use Worker for processing
       </label>
       </div>
       <div>
-        <h4>Options</h4>
-        <label style="font: 1em sans-serif; display: block; margin-bottom: 15px;">
-          <input type="checkbox" name="fakeSegmentation" value="fakeSegmentation" id="fakeSegmentation" /> Fake CPU-based segmentation
+        <h3>Selfie Segmentation Backend</h3>
+        <label>
+          <input type="radio" name="segmenter" value="triangle" id="segmenter-triangle"/> Fake segmentation (CPU)
         </label>
-        <label style="font: 1em sans-serif; display: block; margin-bottom: 15px;">
+        <label>
+          <input type="radio" name="segmenter" value="mediapipe" id="segmenter-mediapipe" checked/> MediaPipe (CPU)
+        </label>
+        <label>
+          <input type="radio" name="segmenter" value="webnn-gpu" id="segmenter-webnn-gpu"/> WebNN (GPU)
+        </label>
+        <label>
+          <input type="radio" name="segmenter" value="webnn-cpu" id="segmenter-webnn-npu"/> WebNN (NPU)
+        </label>
+      </div>
+      <div>
+        <h4>Options</h4>
+        <label>
           <input type="checkbox" name="webrtcSink" value="webrtcSink" id="webrtcSink" /> Use WebRTC sink
         </label>
-        <label style="font: 1em sans-serif; display: block; margin-bottom: 10px; padding-left: 20px;" id="webrtcCodecLabel">
+        <label style="padding-left: 20px;" id="webrtcCodecLabel">
           Codec: <select id="webrtcCodec" name="webrtcCodec">
           </select>
         </label>
@@ -69,11 +87,13 @@
 
     <div style="margin-bottom: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9; width: 600px;">
       <h3 style="margin-top: 0;">Display Settings</h3>
-      <label style="font: 1em sans-serif; margin-right: 20px;">Display Size:</label>
-      <select id="displaySize" name="displaySize" style="padding: 5px; font-size: 14px; border-radius: 3px; border: 1px solid #ccc;">
-        <option value="small">320×180 (Preview)</option>
-        <option value="original" selected>1280×720 (Original)</option>
-      </select>
+      <label>
+        Display Size:
+        <select id="displaySize" name="displaySize" style="margin-left: 20px; padding: 5px; font-size: 14px; border-radius: 3px; border: 1px solid #ccc;">
+          <option value="small">320×180 (Preview)</option>
+          <option value="original" selected>1280×720 (Original)</option>
+        </select>
+      </label>
     </div>
   </form>
   
@@ -91,11 +111,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-segmentation"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js" crossorigin="anonymous"></script>
-  <script src="webgl-renderer.js"></script>
-  <script src="webgpu-renderer.js"></script>
-  <script src="triangle-fake-segmenter.js"></script>
-  <script src="webrtc-sink.js"></script>
-  <script src="blur4.js"></script>
+  <script src="blur4.js" type="module"></script>
 </body>
 
 </html>

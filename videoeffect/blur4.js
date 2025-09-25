@@ -1,3 +1,10 @@
+import { createWebGPUBlurRenderer } from './webgpu-renderer.js';
+import { createWebGL2BlurRenderer } from './webgl-renderer.js';
+import { TriangleFakeSegmenter } from './blur4/triangle-fake-segmenter.js';
+import { WebNNSegmenter } from './blur4/webnn-segmenter.js';
+import { WebRTCSink } from './webrtc-sink.js';
+
+
 function getMedianValue(array) {
   array = array.sort((a, b) => a - b);
   return array.length % 2 !== 0 ? array[Math.floor(array.length / 2)] :
@@ -10,41 +17,64 @@ let rendererSwitchRequested = false;
 // Initialize CPU-only segmenter using MediaPipe
 async function initializeSegmenter() {
   try {
-    // CPU-based segmentation using MediaPipe
-    segmenter = await bodySegmentation.createSegmenter(
-      bodySegmentation.SupportedModels.MediaPipeSelfieSegmentation,
-      {
-        runtime: 'mediapipe',
-        modelType: 'landscape',
-        solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation',
-      }
-    );
-    console.log('Using CPU (MediaPipe) for segmentation');
-
-    // Update status to show segmentation method
-    const rendererType = document.querySelector('input[name="renderer"]:checked').value === 'webgpu' ? 'WebGPU' : 'WebGL2';
-    appStatus.innerText = `Segmentation: CPU (MediaPipe) | Renderer: ${rendererType}`;
-
+    const segmenterType = document.querySelector('input[name="segmenter"]:checked').value;
+    switch (segmenterType) {
+      case 'triangle':
+        segmenter = new TriangleFakeSegmenter();
+        console.log('Using Triangle Fake Segmenter');
+        break;
+      case 'mediapipe':
+        // CPU-based segmentation using MediaPipe
+        segmenter = await bodySegmentation.createSegmenter(
+            bodySegmentation.SupportedModels.MediaPipeSelfieSegmentation,
+            {
+              runtime: 'mediapipe',
+              modelType: 'landscape',
+              solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation',
+            }
+        );
+        console.log('Using CPU (MediaPipe) for segmentation');
+        break;
+      case 'webnn-gpu':
+        segmenter = new WebNNSegmenter('gpu');
+        console.log('Using WebNN GPU for segmentation');
+        break;
+      case 'webnn-npu':
+        segmenter = new WebNNSegmenter('npu');
+        console.log('Using WebNN NPU for segmentation');
+        break;
+      default:
+        throw new Error(`Unknown segmenter: ${segmenterType}`);
+    }
   } catch (error) {
     console.error('Failed to initialize CPU segmentation:', error);
     appStatus.innerText = 'Segmentation initialization failed';
   }
 }
 
-async function segmentMediapipe(downscaledImageData) {
+async function segmenterFunction(downscaledImageData) {
   const segmentation = await segmenter.segmentPeople(downscaledImageData);
   if (!segmentation || segmentation.length === 0) {
     console.warn("Segmentation returned no results.");
     return null;
   }
-  const maskImageData = await segmentation[0].mask.toImageData();
+  let maskImageData;
+  if (segmentation instanceof ImageData) {
+    maskImageData = segmentation;
+  } else {
+    if (!segmentation || segmentation.length === 0) {
+      console.warn("Segmentation returned no results.");
+      return null;
+    }
+
+    maskImageData = await segmentation[0].mask.toImageData();
+  }
   return maskImageData;
 }
 
 // Initialize blur renderer based on radio buttons
 async function initializeBlurRenderer() {
   const useWebGPU = document.querySelector('input[name="renderer"]:checked').value === 'webgpu';
-  const segmenterFunction = fakeSegmentationCheckbox.checked ? createBlurryTriangleMask : segmentMediapipe;
 
   try {
     if (useWebGPU && 'gpu' in navigator) {
@@ -137,7 +167,7 @@ async function runInWorker(trackProcessor, trackGenerator) {
     const directOutputCheckbox = document.getElementById('directOutput');
     const options = {
       useWebGPU: document.querySelector('input[name="renderer"]:checked').value === 'webgpu',
-      useFakeSegmentation: fakeSegmentationCheckbox.checked,
+      segmenterType: document.querySelector('input[name="segmenter"]:checked').value,
       zeroCopy: zeroCopyCheckbox ? zeroCopyCheckbox.checked : false,
       directOutput: directOutputCheckbox ? directOutputCheckbox.checked : false,
     };
@@ -203,7 +233,6 @@ const zeroCopyCheckbox = document.getElementById('zeroCopy');
 const zeroCopyLabel = document.getElementById('zeroCopyLabel');
 const directOutputCheckbox = document.getElementById('directOutput');
 const directOutputLabel = document.getElementById('directOutputLabel');
-const fakeSegmentationCheckbox = document.getElementById('fakeSegmentation');
 const webrtcSink = document.getElementById('webrtcSink');
 const webrtcCodec = document.getElementById('webrtcCodec');
 const webrtcCodecLabel = document.getElementById('webrtcCodecLabel');
@@ -373,7 +402,7 @@ async function initializeApp() {
     updateOptionState();
 
     // If the app is running, and a core pipeline option changed, restart the pipeline.
-    const restartNeededOptions = ['renderer', 'useWorker', 'fakeSegmentation', 'zeroCopy', 'directOutput'];
+    const restartNeededOptions = ['renderer', 'useWorker', 'segmenter', 'zeroCopy', 'directOutput'];
     if (isRunning && restartNeededOptions.includes(event.target.name)) {
       console.log(`Restarting pipeline due to change in '${event.target.name}'`);
       stopVideoProcessing();
