@@ -336,7 +336,7 @@ async function initializeApp() {
     if (capabilities) {
       const supportedCodecs = new Set();
       capabilities.codecs.forEach(codec => {
-        if (codec.mimeType === 'video/VP9' || codec.mimeType === 'video/H265') {
+        if (codec.mimeType === 'video/VP9' || codec.mimeType === 'video/H265' || codec.mimeType === 'video/H264') {
           supportedCodecs.add(codec.mimeType);
         }
       });
