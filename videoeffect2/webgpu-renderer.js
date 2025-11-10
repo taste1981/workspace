@@ -34,33 +34,19 @@ class WebGPURenderer {
     this.downscaledImageData = new ImageData(this.segmentationWidth, this.segmentationHeight);
     let downscaleShaderUrl;
     if (this.useWebNN && this.zeroCopyTensor) {
-      // TODO: This path doesn't work yet.
       downscaleShaderUrl = 'blur4/shaders/downscale-and-convert-to-rgb16float.wgsl';
     } else {
-      downscaleShaderUrl = 'blur4/shaders/downscale.wgsl';
+      downscaleShaderUrl = 'blur4/shaders/downscale-and-convert-to-rgba8unorm.wgsl';
     }
     this.downscaleModule = fetch(downscaleShaderUrl).then(res => res.text())
       .then(code => this.device.createShaderModule({
-        label: 'downscale', 
         code: code.replace(/\${(\w+)}/g, (...groups) => ({
           inputTextureType: zeroCopy ? "texture_external" : "texture_2d<f32>",
         }[groups[1]]))
       }));
-    this.downscalePipeline = this.downscaleModule.then(module => this.device.createRenderPipeline({
-      label: 'downscale',
+    this.downscalePipeline = this.downscaleModule.then(module => this.device.createComputePipeline({
       layout: 'auto',
-      vertex: {
-        module: module,
-      },
-      primitive: {
-        topology: 'triangle-strip'
-      },
-      fragment: {
-        module: module,
-        targets: [{
-          format: 'rgba8unorm'
-        }]
-      }
+      compute: { module: module, entryPoint: 'main' },
     }));
     this.downscaleSampler = this.device.createSampler({
       magFilter: 'linear',
@@ -69,7 +55,7 @@ class WebGPURenderer {
 
     // Create a simple render pipeline to copy the compute shader's output (RGBA)
     // to the canvas, which might have a different format (e.g., BGRA).
-    this.outputRendererVertexModule = fetch('blur4/shaders/render.vertex.wgsl').then(res => res.text())
+    this.outputRendererVertexShader = fetch('blur4/shaders/render.vertex.wgsl').then(res => res.text())
       .then(code => this.device.createShaderModule({ code }));
 
     this.outputRendererFragmentShader = null;
@@ -124,7 +110,7 @@ class WebGPURenderer {
     } else {
       destTexture = this.getOrCreateTexture('downscaleDest', {
         size: [this.segmentationWidth, this.segmentationHeight, 1],
-        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC | GPUTextureUsage.TEXTURE_BINDING,
+        usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC | GPUTextureUsage.TEXTURE_BINDING,
         format: 'rgba8unorm',
       });
     }
@@ -133,22 +119,16 @@ class WebGPURenderer {
       entries: [
         { binding: 0, resource: this.zeroCopy ? sourceTexture : sourceTexture.createView() },
         { binding: 1, resource: this.downscaleSampler },
-        //{ binding: 2, resource: useInterop ? destTexture : destTexture.createView() },
+        { binding: 2, resource: useInterop ? destTexture : destTexture.createView() },
       ],
     });
 
     const commandEncoder = this.device.createCommandEncoder();
-    const renderPass = commandEncoder.beginRenderPass({
-      colorAttachments: [{
-        view: destTexture.createView(),
-        loadOp: 'clear',
-        storeOp: 'store'
-      }]
-    });
-    renderPass.setPipeline(await this.downscalePipeline);
-    renderPass.setBindGroup(0, downscaleBindGroup);
-    renderPass.draw(4);
-    renderPass.end();
+    const computePass = commandEncoder.beginComputePass();
+    computePass.setPipeline(await this.downscalePipeline);
+    computePass.setBindGroup(0, downscaleBindGroup);
+    computePass.dispatchWorkgroups(Math.ceil(this.segmentationWidth / 8), Math.ceil(this.segmentationHeight / 8));
+    computePass.end();
 
     if (useInterop) {
       this.device.queue.submit([commandEncoder.finish()]);
@@ -242,6 +222,7 @@ class WebGPURenderer {
         device: this.device,
         format: navigator.gpu.getPreferredCanvasFormat(),
         alphaMode: 'premultiplied',
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | (this.directOutput ? GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_DST : 0),
       });
     }
     const width = this.webgpuCanvas.width;
@@ -250,7 +231,7 @@ class WebGPURenderer {
     const canvasTexture = this.context.getCurrentTexture();
     const outputTexture = this.getOrCreateTexture('outputTexture', {
       size: [width, height, 1],
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC | GPUTextureUsage.TEXTURE_BINDING
+      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC | GPUTextureUsage.TEXTURE_BINDING
     });
 
     const commandEncoder = this.device.createCommandEncoder();
@@ -262,7 +243,7 @@ class WebGPURenderer {
         this.device.createRenderPipeline({
           layout: 'auto',
           vertex: {
-            module: await this.outputRendererVertexModule,
+            module: await this.outputRendererVertexShader,
             entryPoint: 'main',
           },
           fragment: {
@@ -318,18 +299,10 @@ export async function getWebGPUDevice() {
   // Ensure we're compatible with directOutput
   console.log("Adapter features:");
   console.log([...adapter.features]);
-
-  const requiredFeatures = ['bgra8unorm-storage', 'shader-f16'];
+  const requiredFeatures = ['bgra8unorm-storage', 'shader-f16', 'texture-formats-tier1'];
   for (const feature of requiredFeatures) {
     if (!adapter.features.has(feature)) {
       console.log(`${feature} is not supported`);
-    }
-  }
-  // Optional features that we would nevertheless like to have.
-  const desiredFeatures = ['texture-formats-tier1'];
-  for (const feature of desiredFeatures) {
-    if (adapter.features.has(feature)) {
-      requiredFeatures.push(feature);
     }
   }
   const device = await adapter.requestDevice({ requiredFeatures });

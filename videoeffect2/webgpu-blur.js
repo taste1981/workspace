@@ -70,60 +70,26 @@ export class WebGPUBlur {
     const kernel = this.calculateKernel(this.radius);
     const kernelInitializer = kernel.join(', ');
 
-    const format = this.directOutput ? navigator.gpu.getPreferredCanvasFormat() : 'rgba8unorm';
-
     const blurHorizontalShader = await this.getBlurShader(this.radius, this.tileSize, kernel.length, kernelInitializer, true);
     const blurHorizontalModule = this.device.createShaderModule({ code: blurHorizontalShader });
-    this.pipelines.horizontal = await this.device.createRenderPipelineAsync({
-      label: 'blurHorizontal',
+    this.pipelines.horizontal = await this.device.createComputePipelineAsync({
       layout: 'auto',
-      vertex: {
-        module: blurHorizontalModule,
-      },
-      primitive: {
-        topology: 'triangle-strip'
-      },
-      fragment: {
-        module: blurHorizontalModule,
-        entryPoint: 'main_horizontal',
-        targets: [{ format }]
-      },
+      compute: { module: blurHorizontalModule, entryPoint: 'main_horizontal' },
     });
 
     const blurVerticalShader = await this.getBlurShader(this.radius, this.tileSize, kernel.length, kernelInitializer, false);
     const blurVerticalModule = this.device.createShaderModule({ code: blurVerticalShader });
-    this.pipelines.vertical = await this.device.createRenderPipelineAsync({
-      label: 'blurVertical',
+    this.pipelines.vertical = await this.device.createComputePipelineAsync({
       layout: 'auto',
-      vertex: {
-        module: blurVerticalModule,
-      },
-      primitive: {
-        topology: 'triangle-strip'
-      },
-      fragment: {
-        module: blurVerticalModule,
-        entryPoint: 'main_vertical',
-        targets: [{ format }]
-      },
+      compute: { module: blurVerticalModule, entryPoint: 'main_vertical' },
     });
 
     const k00 = kernel[0] * kernel[0];
     const blendShader = await this.getBlendShader(k00, this.tileSize);
-    const blendModule = this.device.createShaderModule({ label: 'blend', code: blendShader });
-    this.pipelines.blend = await this.device.createRenderPipelineAsync({
-      label: 'blend',
+    const blendModule = this.device.createShaderModule({ code: blendShader });
+    this.pipelines.blend = await this.device.createComputePipelineAsync({
       layout: 'auto',
-      vertex: {
-        module: blendModule,
-      },
-      primitive: {
-        topology: 'triangle-strip'
-      },
-      fragment: {
-        module: blendModule,
-        targets: [{ format }]
-      },
+      compute: { module: blendModule, entryPoint: 'main' },
     });
   }
 
@@ -192,62 +158,38 @@ export class WebGPUBlur {
     device.queue.writeBuffer(blurSizeBuffer, 0, blurSizeData);
     device.queue.writeBuffer(blurSizeBuffer, 8, blurTexelSizeData);
 
-    const horizontalTexture = getOrCreateTexture(device, this.resourceCache, 'horizontal', [blurWidth, blurHeight], this.directOutput, GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING);
-    const blurredTexture = getOrCreateTexture(device, this.resourceCache, 'blurred', [blurWidth, blurHeight], this.directOutput, GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING);
+    const horizontalTexture = getOrCreateTexture(device, this.resourceCache, 'horizontal', [blurWidth, blurHeight], this.directOutput, GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING);
+    const blurredTexture = getOrCreateTexture(device, this.resourceCache, 'blurred', [blurWidth, blurHeight], this.directOutput, GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING);
 
-    let passEncoder = commandEncoder.beginRenderPass({
-      colorAttachments: [{
-        view: horizontalTexture.createView(),
-        loadOp: 'clear',
-        storeOp: 'store',
-      }]
-    });
+    const passEncoder = commandEncoder.beginComputePass();
 
     const horizontalBindGroup = device.createBindGroup({
       layout: this.pipelines.horizontal.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: this.zeroCopy ? inputTexture : inputTexture.createView() },
         { binding: 1, resource: maskTexture.createView() },
-        { binding: 2, resource: this.sampler },
-        { binding: 3, resource: { buffer: blurSizeBuffer } },
+        { binding: 2, resource: horizontalTexture.createView() },
+        { binding: 3, resource: this.sampler },
+        { binding: 4, resource: { buffer: blurSizeBuffer } },
       ],
     });
     passEncoder.setPipeline(this.pipelines.horizontal);
     passEncoder.setBindGroup(0, horizontalBindGroup);
-    passEncoder.draw(4);
-
-    passEncoder.end();
-
-    passEncoder = commandEncoder.beginRenderPass({
-      colorAttachments: [{
-        view: blurredTexture.createView(),
-        loadOp: 'clear',
-        storeOp: 'store',
-      }]
-    });
+    passEncoder.dispatchWorkgroups(Math.ceil(blurWidth / this.tileSize), Math.ceil(blurHeight / this.tileSize));
 
     const verticalBindGroup = device.createBindGroup({
       layout: this.pipelines.vertical.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: horizontalTexture.createView() },
         { binding: 1, resource: maskTexture.createView() },
-        { binding: 2, resource: this.sampler },
-        { binding: 3, resource: { buffer: blurSizeBuffer } },
+        { binding: 2, resource: blurredTexture.createView() },
+        { binding: 3, resource: this.sampler },
+        { binding: 4, resource: { buffer: blurSizeBuffer } },
       ],
     });
     passEncoder.setPipeline(this.pipelines.vertical);
     passEncoder.setBindGroup(0, verticalBindGroup);
-    passEncoder.draw(4);
-
-    passEncoder.end();
-
-    passEncoder = commandEncoder.beginRenderPass({
-      colorAttachments: [{
-        view: outputTexture.createView(),
-        loadOp: 'clear',
-        storeOp: 'store',
-      }]
-    });
+    passEncoder.dispatchWorkgroups(Math.ceil(blurWidth / this.tileSize), Math.ceil(blurHeight / this.tileSize));
 
     const blendBindGroup = device.createBindGroup({
       layout: this.pipelines.blend.getBindGroupLayout(0),
@@ -255,13 +197,14 @@ export class WebGPUBlur {
         { binding: 0, resource: this.zeroCopy ? inputTexture : inputTexture.createView() },
         { binding: 1, resource: blurredTexture.createView() },
         { binding: 2, resource: maskTexture.createView() },
-        { binding: 3, resource: this.sampler },
-        { binding: 4, resource: { buffer: imageSizeBuffer } },
+        { binding: 3, resource: outputTexture.createView() },
+        { binding: 4, resource: this.sampler },
+        { binding: 5, resource: { buffer: imageSizeBuffer } },
       ],
     });
     passEncoder.setPipeline(this.pipelines.blend);
     passEncoder.setBindGroup(0, blendBindGroup);
-    passEncoder.draw(6);
+    passEncoder.dispatchWorkgroups(Math.ceil(width / this.tileSize), Math.ceil(height / this.tileSize));
 
     passEncoder.end();
   }
