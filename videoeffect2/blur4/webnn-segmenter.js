@@ -5,24 +5,24 @@
 import { SelfieSegmentationLandscape } from "./selfie-segmentation-landscape.js";
 
 export class WebNNSegmenter {
-  constructor(deviceType, layout = 'nhwc') {
+  constructor({ deviceType, layout = 'nhwc', webGpuDevice = null }) {
     this.deviceType = deviceType;
     this.layout = layout;
+    this.webGpuDevice = webGpuDevice;
     this.selfieSegmentation = new SelfieSegmentationLandscape({
       deviceType,
       dataType: 'float16',
       layout,
       weightsUrlPrefix: 'blur4/',
     });
-    this.built = false;
+    console.log('Compiling WebNN SelfieSegmentation model for', deviceType, 'with layout', layout);
+    this.built = this.selfieSegmentation.load({ webGpuDevice })
+      .then(graph => this.selfieSegmentation.build(graph))
+      .then(() => console.log('Compiled WebNN SelfieSegmentation model'));
   }
 
   async segment(imageData) {
-    if (!this.built) {
-      const graph = await this.selfieSegmentation.load()
-      await this.selfieSegmentation.build(graph);
-      this.built = true;
-    }
+    await this.built;
     const { data, width, height } = imageData;
     const pixels = width * height;
     const inputArray = new Float16Array(pixels * 3);
@@ -52,23 +52,20 @@ export class WebNNSegmenter {
   }
 
   async getInputBuffer(device) {
-    if (!this.built) {
-      const graph = await this.selfieSegmentation.load({ gpuDevice: device });
-      await this.selfieSegmentation.build(graph);
-      this.built = true;
-    }
+    console.assert(this.webGpuDevice !== null);
+    await this.built;
     return this.selfieSegmentation.getInputBuffer();
   }
 
-  async segmentGPUBuffer(width, height) {
-    console.assert(this.built);
-    const result = await this.selfieSegmentation.compute();
-    const img = new ImageData(width, height);
-    const dst = img.data;
-    for (let i = 0, p = 0; i < dst.length; i += 4) {
-      const v = Math.max(0, Math.min(1, result[p++])) * 255;
-      dst[i] = dst[i + 1] = dst[i + 2] = dst[i + 3] = Math.round(v);
-    }
-    return img;
+  async getOutputBuffer(device) {
+    console.assert(this.webGpuDevice !== null);
+    await this.built;
+    return this.selfieSegmentation.getOutputBuffer();
+  }
+
+  async segmentGPUBuffer() {
+    console.assert(this.webGpuDevice !== null);
+    await this.built;
+    await this.selfieSegmentation.compute();
   }
 }

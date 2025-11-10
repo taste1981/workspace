@@ -12,13 +12,14 @@ let segmenter = null;
 // Import scripts that are also needed in the worker.
 // These scripts must not access `document` or `window`.
 import { createWebGL2BlurRenderer } from './webgl-renderer.js';
-import { createWebGPUBlurRenderer } from './webgpu-renderer.js';
+import { getWebGPUDevice, createWebGPUBlurRenderer } from './webgpu-renderer.js';
 import { TriangleFakeSegmenter } from './blur4/triangle-fake-segmenter.js';
+import { MediaPipeSegmenter } from "./blur4/mediapipe-segmenter";
 import { WebNNSegmenter } from './blur4/webnn-segmenter.js';
 
 // Since the worker can't access the main thread's 'bodySegmentation' object directly,
 // we need to load the scripts that provide it.
-async function initializeSegmenter(segmenterType) {
+async function initializeSegmenter(segmenterType, webGpuDevice) {
   try {
     switch (segmenterType) {
       case 'triangle':
@@ -34,21 +35,15 @@ async function initializeSegmenter(segmenterType) {
         await import('https://cdn.jsdelivr.net/npm/@tensorflow-models/body-segmentation/dist/body-segmentation.js');
         await import('https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js');
 
-        segmenter = await self.bodySegmentation.createSegmenter(
-          self.bodySegmentation.SupportedModels.MediaPipeSelfieSegmentation, {
-            runtime: 'mediapipe',
-            modelType: 'landscape',
-            solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation',
-          }
-        );
+        segmenter = new MediaPipeSegmenter();
         console.log('Worker: Using CPU (MediaPipe) for segmentation');
         break;
       case 'webnn-gpu':
-        segmenter = new WebNNSegmenter('gpu');
+        segmenter = new WebNNSegmenter({ deviceType: 'gpu', webGpuDevice });
         console.log('Worker: Using WebNN GPU for segmentation');
         break;
       case 'webnn-npu':
-        segmenter = new WebNNSegmenter('npu');
+        segmenter = new WebNNSegmenter({ deviceType: 'npu' });
         console.log('Worker: Using WebNN NPU for segmentation');
         break;
       default:
@@ -60,34 +55,22 @@ async function initializeSegmenter(segmenterType) {
   }
 }
 
-async function segmenterFunction(downscaledImageData) {
-  if (!segmenter) return null;
-  const segmentation = await segmenter.segmentPeople(downscaledImageData);
-  if (!segmentation || segmentation.length === 0) {
-    return null;
-  }
-  if (segmentation instanceof ImageData) {
-    return segmentation;
-  }
-  return await segmentation[0]?.mask.toImageData();
-}
-
 async function initializeBlurRenderer(options) {
-  const { useWebGPU, segmenterType, zeroCopy, directOutput } = options;
-  await initializeSegmenter(segmenterType);
+  const { webGpuDevice, segmenterType, zeroCopy, directOutput } = options;
+  await initializeSegmenter(segmenterType, webGpuDevice);
 
   try {
-    if (useWebGPU && 'gpu' in self.navigator) {
+    if (webGpuDevice) {
       console.log('Instantiate WebGPU renderer')
-      appBlurRenderer = await createWebGPUBlurRenderer(segmenterFunction, zeroCopy, directOutput);
+      appBlurRenderer = await createWebGPUBlurRenderer(webGpuDevice, segmenter, zeroCopy, directOutput);
     } else {
       console.log('Instantiate WebGL renderer')
-      appBlurRenderer = await createWebGL2BlurRenderer(segmenterFunction);
+      appBlurRenderer = await createWebGL2BlurRenderer(segmenter);
     }
   } catch (error) {
     console.error('Worker: Failed to initialize renderer', error);
     // Attempt to fallback to WebGL2 if WebGPU fails
-    appBlurRenderer = await createWebGL2BlurRenderer(segmenterFunction);
+    appBlurRenderer = await createWebGL2BlurRenderer(segmenter);
   }
 }
 
@@ -101,6 +84,7 @@ self.onmessage = async (event) => {
 
   if (type === 'start') {
     isRunning = true;
+    options.webGpuDevice = await getWebGPUDevice();
     await initializeBlurRenderer(options);
 
     const reader = readable.getReader();

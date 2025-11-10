@@ -1,14 +1,21 @@
+struct VertexOut {
+  @builtin(position) pos: vec4f,
+  @location(0) uv: vec2f,
+}
+
+@vertex
+fn vertMain(@builtin(vertex_index) vertexIndex: u32) -> VertexOut {
+  var pos = array<vec2f, 4>(
+    vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0), vec2f(1.0, 1.0),
+  );
+  var uv = pos[vertexIndex] * vec2f(0.5, -0.5) + 0.5;
+  return VertexOut(vec4f(pos[vertexIndex], 0, 1), uv);
+}
+
 @group(0) @binding(0) var inputTexture: ${inputTextureType};
 @group(0) @binding(1) var textureSampler: sampler;
-@group(0) @binding(2) var outputTexture: texture_storage_2d<${outputTextureType}, write>;
 
-@compute @workgroup_size(8, 8)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let outputDims = textureDimensions(outputTexture);
-    if (global_id.x >= outputDims.x || global_id.y >= outputDims.y) {
-        return;
-    }
-    let uv = (vec2<f32>(global_id.xy) + vec2<f32>(0.5, 0.5)) / vec2<f32>(outputDims);
-    let color = textureSampleBaseClampToEdge(inputTexture, textureSampler, uv);
-    textureStore(outputTexture, global_id.xy, color);
+@fragment
+fn fragMain(@location(0) uv: vec2f) -> @location(0) vec4f {
+    return textureSampleBaseClampToEdge(inputTexture, textureSampler, uv);
 }

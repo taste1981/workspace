@@ -103,16 +103,11 @@ export class SelfieSegmentationLandscape {
         }
     }
 
-    async load({ gpuDevice } = {}) {
-        if (gpuDevice) {
-            console.assert(this.deviceType_ === 'gpu', 'WebGPU interop requires deviceType to be "gpu"');
-            console.assert(this.layout === 'nhwc', 'WebGPU interop requires nhwc layout');
-            this.context_ = await navigator.ml.createContext(gpuDevice);
-        } else {
-            this.context_ = await navigator.ml.createContext({
-                deviceType: this.deviceType_,
-            });
-        }
+    async load({ webGpuDevice } = {}) {
+        console.log(`Creating WebML context with device type ${this.deviceType_}`);
+        this.context_ = await navigator.ml.createContext({
+            deviceType: this.deviceType_,
+        });
 
         // Choose the layout based on the preferred input layout of the context.
         this.layout = this.layout ?? this.context_.opSupportLimits().preferredInputLayout;
@@ -145,13 +140,13 @@ export class SelfieSegmentationLandscape {
         };
         const input = this.builder_.input('input', inputDesc);
         inputDesc.writable = true;
-        inputDesc.exportableToGPU = Boolean(gpuDevice);
-        this.inputTensor_ = await this.context_.createTensor(inputDesc);
-        this.outputTensor_ = await this.context_.createTensor({
+        const createFn = webGpuDevice ? "createExportableTensor" : "createTensor";
+        this.inputTensor_ = await this.context_[createFn](inputDesc, webGpuDevice);
+        this.outputTensor_ = await this.context_[createFn]({
             dataType: this.dataType_,
             shape: this.outputShape_,
             readable: true,
-        });
+        }, webGpuDevice);
 
         this.addB_ = this.builder_.constant(
             {dataType: this.dataType_, shape: [1, 1, 1, 1]},
@@ -486,6 +481,10 @@ export class SelfieSegmentationLandscape {
         return await this.context_.exportToGPU(this.inputTensor_);
     }
 
+    async getOutputBuffer() {
+        return await this.context_.exportToGPU(this.outputTensor_);
+    }
+
     async build(outputOperand) {
         this.graph_ = await this.builder_.build({segment_back: outputOperand});
     }
@@ -497,7 +496,9 @@ export class SelfieSegmentationLandscape {
         const inputs = {input: this.inputTensor_};
         const outputs = {segment_back: this.outputTensor_};
         this.context_.dispatch(this.graph_, inputs, outputs);
-        const results = await this.context_.readTensor(this.outputTensor_);
-        return new this.ArrayType_(results);
+        if (inputBuffer) {
+            const results = await this.context_.readTensor(this.outputTensor_);
+            return new this.ArrayType_(results);
+        }
     }
 }
