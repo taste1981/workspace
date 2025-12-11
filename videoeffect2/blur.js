@@ -113,7 +113,16 @@ async function processFrames(readable, writable, onFpsUpdate) {
       lastFpsTime = currentTime;
     }
 
+    // Measure processing time for this frame
+    const t0 = performance.now();
     const processedFrame = await processOneFrame(frame);
+    const t1 = performance.now();
+    const durationMs = t1 - t0;
+
+    // Record timing: start is relative to run start so it's easier to analyze
+    const frameIndex = appCount++;
+    appSegmentTimes.push({ index: frameIndex, start: (t0 - (appStartRun || 0)), duration: durationMs });
+
     frame.close();
     await writer.write(processedFrame);
     processedFrame.close();
@@ -290,6 +299,13 @@ function stopVideoProcessing() {
     appReader = null;
   }
 
+  // Export recorded timings to CSV when stopping
+  try {
+    generateAndDownloadCsv();
+  } catch (e) {
+    console.warn('Failed to generate/download CSV:', e);
+  }
+
   appBlurRenderer = null;
 
   startButton.disabled = false;
@@ -428,4 +444,29 @@ function loadSettingsFromUrl() {
   // After loading settings, update the dependent UI state
   updateOptionState();
   updateDisplaySize();
+}
+
+// Helper to generate CSV from appSegmentTimes and trigger download
+function generateAndDownloadCsv() {
+  if (!appSegmentTimes || appSegmentTimes.length === 0) {
+    console.log('No timing data to export.');
+    return;
+  }
+
+  let csv = 'index,start_ms_since_run_start,duration_ms\n';
+  for (const entry of appSegmentTimes) {
+    csv += `${entry.index},${entry.start.toFixed(3)},${entry.duration.toFixed(3)}\n`;
+  }
+
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `process_times_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+  }, 1000);
 }
