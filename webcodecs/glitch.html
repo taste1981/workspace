@@ -10,11 +10,6 @@
       background: gold;
     }
     
-    video {
-      padding: 5px;
-      background: blue;
-    }
-
     button {
       background-color: #555555;
       border: none;
@@ -109,6 +104,13 @@
       <span>
         <label style="margin-left:8px"><input type="checkbox" id="autoResize" checked /> Auto Resize Source</label>
       </span>
+      <span>
+        ,        Encode resolution:
+        <select id="encodeRes" style="margin-left:6px">
+          <option value="320x240">320 x 240</option>
+          <option value="1280x720" selected>1280 x 720</option>
+        </select>
+      </span>
       <div>
         <textarea id="log" style="width: 80%; height: 300px;" readonly></textarea>
       </div>
@@ -118,8 +120,8 @@
     </div>
     
     
-    <canvas id="src" style="display:none"></canvas>   
-    <video id="vPreview" autoplay muted></video>        
+    <canvas id="src"></canvas>   
+    <video id="vPreview" autoplay muted style="display:none"></video>
     <canvas id="dst"></canvas>   
   </div>
   
@@ -244,14 +246,10 @@
       _sizeCycleId = setInterval(() => {
         idx = (idx + 1) % sizes.length;
         const s = sizes[idx];
-        // resize source and destination canvases
+        // resize source canvas
         srcCnv.width = s.width;
         srcCnv.height = s.height;
-        if (dstCnv) {
-          dstCnv.width = s.width;
-          dstCnv.height = s.height;
-        }
-        appendMsg('Auto-resized source canvas to ' + s.width + 'x' + s.height);
+        appendMsg('Auto-resized source canvas to ' + s.width + 'x' + s.height + ' (decode canvas unchanged)');
       }, intervalMs);
     }
 
@@ -277,37 +275,71 @@
       srcCnv.width = dims.width;
       srcCnv.height = dims.height;
       let dstCnv = document.getElementById("dst");
-      dstCnv.width = srcCnv.width;
-      dstCnv.height = srcCnv.height;      
+      // Do not force the decode canvas to match the source canvas here.
+      // The decode canvas should be set from the decoderConfig (encoding resolution) when available.
       startDrawing(srcCnv);
       let source_type = document.getElementById('source').value;
 
+      // Determine encode resolution from UI
+      const encodeRes = document.getElementById('encodeRes').value || '1280x720';
+      const [encodeWidth, encodeHeight] = encodeRes.split('x').map(n => Number(n));
+
+      // Make source/destination canvases visible and set decode canvas to encode resolution
+      try {
+        srcCnv.style.display = '';
+        dstCnv.style.display = '';
+        dstCnv.width = encodeWidth;
+        dstCnv.height = encodeHeight;
+        appendMsg(`Set decode canvas to encode resolution ${encodeWidth}x${encodeHeight}`);
+      } catch (e) {
+        console.warn('Failed to set canvas visibility or size:', e);
+      }
       
       let stream = null;
       if (source_type == 'camera') {
-        let constraints = { audio: false, video:  { width: dims.width, height: dims.height, frameRate: fps } };
+        // Request camera at the encode resolution so encoder receives matching frames
+        let constraints = { audio: false, video:  { width: encodeWidth, height: encodeHeight, frameRate: fps } };
         stream = await window.navigator.mediaDevices.getUserMedia(constraints);
       } else if(source_type == 'canvas-capture' || source_type == 'canvas-copy') {
-        stream = srcCnv.captureStream(fps);
-        // If auto-resize is enabled, start the cycler to change canvas size periodically
+        // For canvas sources we will produce frames scaled to the encode resolution
+        // so we don't rely on captureStream to determine encoder input size.
+        stream = null; // we won't use a real MediaStream for canvas-driven frames
+        // If auto-resize is enabled, start the cycler to change source canvas size periodically
         const auto = document.getElementById('autoResize');
         if (auto && auto.checked) {
           startSizeCycler(srcCnv, dstCnv, 5000);
         } else {
           stopSizeCycler();
         }
-      } 
+      }
       
-      let track = stream.getTracks()[0];
-      let settings = track.getSettings();
-      
-      fps = settings.frameRate;
+      let settings = {};
+      let track = null;
+      if (stream) {
+        track = stream.getTracks()[0];
+        settings = track.getSettings();
+        fps = settings.frameRate || fps;
+      } else {
+        // Use configured fps for canvas sources
+        fps = fps;
+      }
       appendMsg(`Set bitrate: ${bitrate} bps`);
       appendMsg(`Set acceleration: ${acceleration}`);      
       appendMsg(`Set frame rate: ${fps}`);      
       video.srcObject = stream;
-      let media_processor = new MediaStreamTrackProcessor(track);
-      const reader = media_processor.readable.getReader();
+      let reader = null;
+      if (track) {
+        let media_processor = new MediaStreamTrackProcessor(track);
+        reader = media_processor.readable.getReader();
+      }
+
+      // Prepare a temp canvas for scaling source frames into the encode resolution when using canvas sources
+      let tempCnv = null;
+      if (!track) {
+        tempCnv = document.createElement('canvas');
+        tempCnv.width = encodeWidth;
+        tempCnv.height = encodeHeight;
+      }
       
       const init = {
         output: (chunk, md) => {
@@ -354,8 +386,9 @@
       const config = {
         codec: codec_string,
         hardwareAcceleration: acceleration,
-        width: settings.width,// - 64,
-        height: settings.height, // - 64,
+        // Use the selected encode resolution instead of following source/canvas size
+        width: encodeWidth,
+        height: encodeHeight,
         bitrate: bitrate,
         framerate: fps,
         contentHint: (source_type == 'camera' ? "motion" : "detail"),
@@ -375,8 +408,12 @@
       async function readFrame () {          
         let frame = null;
         let timeout = 0
-        if (source_type == 'canvas-copy') {
-          frame = new VideoFrame(srcCnv, {timestamp : 1000 * performance.now()});
+        if (!track) {
+          // Canvas-driven: draw src onto temp canvas at encode resolution and create a VideoFrame
+          const ctx = tempCnv.getContext('2d');
+          ctx.clearRect(0, 0, tempCnv.width, tempCnv.height);
+          ctx.drawImage(srcCnv, 0, 0, tempCnv.width, tempCnv.height);
+          frame = new VideoFrame(tempCnv, { timestamp: 1000 * performance.now() });
           timeout = 1000 / fps;
         } else {
           const result = await reader.read();
@@ -445,6 +482,18 @@
           config.hardwareAcceleration = 'no-preference';
           decoder.configure(config);
           console.log("Decoder config" + JSON.stringify(config));
+
+          // Ensure the rendering canvas matches the decode size
+          try {
+            const dst = document.getElementById('dst');
+            if (config.width && config.height) {
+              dst.width = config.width;
+              dst.height = config.height;
+              appendMsg(`Set decode canvas to ${config.width}x${config.height}`);
+            }
+          } catch (e) {
+            console.warn('Failed to set decode canvas size:', e);
+          }
         }        
         decoder.decode(chunk);
       });
