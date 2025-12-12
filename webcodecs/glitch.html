@@ -105,7 +105,10 @@
           <option value="canvas-capture" >Canvas Capture</option>
           <option value="canvas-copy">Canvas Copy</option>
         </select>
-      </span> 
+      </span>
+      <span>
+        <label style="margin-left:8px"><input type="checkbox" id="autoResize" checked /> Auto Resize Source</label>
+      </span>
       <div>
         <textarea id="log" style="width: 80%; height: 300px;" readonly></textarea>
       </div>
@@ -170,24 +173,20 @@
     // Draw pretty animation on the canvas
     async function startDrawing(cnv) {
       var ctx = cnv.getContext('2d');
-     
-      ctx.fillStyle = "white";
-      let width = cnv.width;
-      let height = cnv.height;
-      let cx = width / 2;
-      let cy = height / 2;
-      let r = Math.min(width, height) / 5;
-      ctx.fillRect(0, 0, width, height);
-      
+
+      // initial clear
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, cnv.width, cnv.height);
+
       function noise() {
         for (let i = 0; i < 5; i++) {
-            let x = rnd(width); 
-            let y = rnd(height);
+            let x = rnd(cnv.width);
+            let y = rnd(cnv.height);
             let w = 30;
             let h = 30;
-            let a = 'rgba(' + rnd(255) + ',' + rnd(255) + ',' + rnd(255) + ',' + 1 + ')'
-            let b = 'rgba(' + rnd(255) + ',' + rnd(255) + ',' + rnd(255) + ',' + 1 + ')'
-            let c = 'rgba(' + rnd(255) + ',' + rnd(255) + ',' + rnd(255) + ',' + 1 + ')'
+            let a = 'rgba(' + rnd(255) + ',' + rnd(255) + ',' + rnd(255) + ',1)';
+            let b = 'rgba(' + rnd(255) + ',' + rnd(255) + ',' + rnd(255) + ',1)';
+            let c = 'rgba(' + rnd(255) + ',' + rnd(255) + ',' + rnd(255) + ',1)';
             let gradient = ctx.createLinearGradient(x, y, x + w, y + h);
             gradient.addColorStop(0, a);
             gradient.addColorStop(0.5, b);
@@ -196,44 +195,73 @@
             ctx.fillStyle = gradient;
             ctx.fillRect(x, y, w, h);
         }
-      }      
-      
+      }
+
       ctx.font = '30px Helvetica';
       const text = "😊📹📷😎🐨🐸🦓🐔 🎥🎞️😊";
-      const size = ctx.measureText(text).width;     
-     
+
+      // measure size each frame so we adapt to canvas resizing
       let drawOneFrame = function (time) {
+        // recompute dimensions because canvas may resize dynamically
+        let width = cnv.width;
+        let height = cnv.height;
+        let cx = width / 2;
+        let cy = height / 2;
+        let size = ctx.measureText(text).width;
+
         let angle = Math.PI * 2 * (time / 5000);
         let scale = 1 + 0.3 * Math.sin(Math.PI * 2 * (time / 7000));
         ctx.save();
+        // clear the canvas for this frame
+        ctx.fillStyle = 'white';
+        ctx.fillRect(0, 0, width, height);
         noise();
 
         ctx.translate(cx, cy);
         ctx.rotate(angle);
-        ctx.scale(scale, scale);       
-      
+        ctx.scale(scale, scale);
+
         ctx.fillStyle = "hsl(" + (angle * 40 ) + ",80%,50%)";
         ctx.fillRect(-size / 2, 10, size, 25);
-        
+
         ctx.fillStyle = 'black';
-        ctx.fillText(text, -size / 2, 0);        
-        
-        ctx.restore();        
+        ctx.fillText(text, -size / 2, 0);
+
+        ctx.restore();
         window.requestAnimationFrame(drawOneFrame);
       }
       drawOneFrame(performance.now());
       await waitForNextFrame();
     }
-    
-    // Dynamic resolution switching setup
-const resolutions = [
-  { width: 1280, height: 720 },
-  { width: 640, height: 360 },
-  { width: 960, height: 540 }
-];
-let resIndex = 0;
-let framesToNextConfig = 30;
 
+    // Cycle canvas sizes among a predefined set
+    let _sizeCycleId = null;
+    function startSizeCycler(srcCnv, dstCnv, intervalMs = 5000) {
+      stopSizeCycler();
+      const sizes = [ {width:640, height:360}, {width:960, height:540}, {width:1280, height:720} ];
+      let idx = sizes.findIndex(s => s.width === srcCnv.width && s.height === srcCnv.height);
+      if (idx < 0) idx = 0;
+      _sizeCycleId = setInterval(() => {
+        idx = (idx + 1) % sizes.length;
+        const s = sizes[idx];
+        // resize source and destination canvases
+        srcCnv.width = s.width;
+        srcCnv.height = s.height;
+        if (dstCnv) {
+          dstCnv.width = s.width;
+          dstCnv.height = s.height;
+        }
+        appendMsg('Auto-resized source canvas to ' + s.width + 'x' + s.height);
+      }, intervalMs);
+    }
+
+    function stopSizeCycler() {
+      if (_sizeCycleId) {
+        clearInterval(_sizeCycleId);
+        _sizeCycleId = null;
+      }
+    }
+    
     async function captureAndEncode(processChunk) {
       let video = document.getElementById("vPreview");
       let frame_counter = 0;
@@ -243,7 +271,7 @@ let framesToNextConfig = 30;
       let acceleration = document.getElementById('acceleration').value;
       let codec_string = document.getElementById('codec').value;
       let fps = 30;
-      let dims = resolutions[resIndex]; // Use dynamic resolution
+      let dims = JSON.parse(document.getElementById('dims').value);   
       let scalability = document.getElementById('scalability').value;
       let srcCnv = document.getElementById("src");
       srcCnv.width = dims.width;
@@ -254,13 +282,22 @@ let framesToNextConfig = 30;
       startDrawing(srcCnv);
       let source_type = document.getElementById('source').value;
 
+      
       let stream = null;
       if (source_type == 'camera') {
         let constraints = { audio: false, video:  { width: dims.width, height: dims.height, frameRate: fps } };
         stream = await window.navigator.mediaDevices.getUserMedia(constraints);
       } else if(source_type == 'canvas-capture' || source_type == 'canvas-copy') {
         stream = srcCnv.captureStream(fps);
+        // If auto-resize is enabled, start the cycler to change canvas size periodically
+        const auto = document.getElementById('autoResize');
+        if (auto && auto.checked) {
+          startSizeCycler(srcCnv, dstCnv, 5000);
+        } else {
+          stopSizeCycler();
+        }
       } 
+      
       let track = stream.getTracks()[0];
       let settings = track.getSettings();
       
@@ -314,39 +351,27 @@ let framesToNextConfig = 30;
           console.log(e.message);
         }
       };           
-      let encoder;
-      let config;
-      function configureEncoder() {
-        dims = resolutions[resIndex];
-        srcCnv.width = dims.width;
-        srcCnv.height = dims.height;
-        dstCnv.width = dims.width;
-        dstCnv.height = dims.height;
-        config = {
-          codec: codec_string,
-          hardwareAcceleration: acceleration,
-          width: dims.width,
-          height: dims.height,
-          bitrate: bitrate,
-          framerate: fps,
-          contentHint: (source_type == 'camera' ? "motion" : "detail"),
-          latencyMode: "realtime"
-        };
-        if (scalability != '')
-          config.scalabilityMode = scalability;
-        if (codec_string.startsWith("avc"))
-          config.avc = { format: "annexb" };
-        if (codec_string.startsWith("hvc"))
-          config.hevc = { format: "annexb" };
-        if (!encoder) {
-          encoder = new VideoEncoder(init);
-        }
-        encoder.configure(config);
-        appendMsg(`Switched resolution to ${dims.width}x${dims.height}`);
-      }
-      configureEncoder();
-
-      let firstKeyFrame = true;
+      const config = {
+        codec: codec_string,
+        hardwareAcceleration: acceleration,
+        width: settings.width,// - 64,
+        height: settings.height, // - 64,
+        bitrate: bitrate,
+        framerate: fps,
+        contentHint: (source_type == 'camera' ? "motion" : "detail"),
+        latencyMode: "realtime" // "quality"
+      };
+      if (scalability != '')
+        config.scalabilityMode = scalability;
+      if (codec_string.startsWith("avc"))
+        config.avc = { format: "annexb" };
+      if (codec_string.startsWith("hvc"))
+        config.hevc = { format: "annexb" };      
+      
+      console.log("Encoder config" + JSON.stringify(config));
+      let encoder = new VideoEncoder(init);
+      encoder.configure(config);
+      
       async function readFrame () {          
         let frame = null;
         let timeout = 0
@@ -357,26 +382,29 @@ let framesToNextConfig = 30;
           const result = await reader.read();
           frame = result.value;          
         }
-        // Switch resolution every 30 frames
-        framesToNextConfig--;
-        if (framesToNextConfig === 0) {
-          resIndex = (resIndex + 1) % resolutions.length;
-          framesToNextConfig = 30;
-          configureEncoder();
-        }
+       
+        
         if (encoder.encodeQueueSize < 2) {
           frame_counter++;
           ts_to_start_time.set(frame.timestamp, performance.now());
-          let encode_options = {};
-          if (firstKeyFrame) {
-            encode_options.keyFrame = true;
-            firstKeyFrame = false;
+          console.log(`Encoding frame: ${frame.timestamp}`);
+          const encode_options = { keyFrame: force_keyframe };
+          force_keyframe = false;
+          if (scalability == "manual") {
+            const buffers = encoder.getAllFrameBuffers();
+            if (frame_counter % 10 == 0) {
+              encode_options.updateBuffer = buffers[0];
+            } else {
+              encode_options.referenceBuffers = [buffers[0]];
+            }
           }
           encoder.encode(frame, encode_options); 
         }        
         frame.close();
+        
         setTimeout(readFrame, timeout);
       };
+                  
       readFrame();      
     }
 
@@ -413,7 +441,8 @@ let framesToNextConfig = 30;
         let config = md.decoderConfig;        
         if (config) {
           config.optimizeForLatency = true;
-          config.hardwareAcceleration = 'prefer-hardware';
+          //config.hardwareAcceleration = 'prefer-software';
+          config.hardwareAcceleration = 'no-preference';
           decoder.configure(config);
           console.log("Decoder config" + JSON.stringify(config));
         }        
@@ -422,6 +451,10 @@ let framesToNextConfig = 30;
       document.getElementById("start").style.visibility = 'hidden';
     }
 
+    // Stop cycler when page is unloaded
+    window.addEventListener('beforeunload', () => {
+      stopSizeCycler();
+    });
   </script>
 
 </body>
