@@ -12,7 +12,19 @@ export class SelfieSegmentationLandscape {
         this.graph_ = null;
         this.inputTensor_ = null;
         this.outputTensor_ = null;
-        this.outputShape_ = [1, 144, 256, 1];
+
+        // CoreML on MacOS may automatically flattens [N, H, W, C] inputs into [N*H*W, C]
+        // due to  the constraints of pixel buffer. To prevent this, we initialize the tensor
+        // with a 2D shape of [N*H, W*C], and then explicitly reshape it back to the required
+        // 4D [N, H, W, C] structure within the model graph before inference.
+        this.needs2DTensor = (typeof navigator === 'undefined' ||
+                              /Mac OS/.test(navigator.userAgent)) && layout === 'nhwc';
+        if (this.needs2DTensor) {
+            this.outputShape_ = [144, 256];
+        } else {
+            this.outputShape_ = [1, 144, 256, 1];
+        }
+
         this.weightsUrl_ = `${weightsUrlPrefix}models/selfie_segmentation/landscape`;
         this.layout = layout;
     }
@@ -111,8 +123,14 @@ export class SelfieSegmentationLandscape {
 
         // Choose the layout based on the preferred input layout of the context.
         this.layout = this.layout ?? this.context_.opSupportLimits().preferredInputLayout;
-        this.inputShape =
-            this.layout === 'nhwc' ? [1, 144, 256, 3] : [1, 3, 144, 256];
+
+        if (this.needs2DTensor) {
+            this.inputShape = [144, 768];
+        } else if (this.layout === 'nhwc') {
+            this.inputShape = [1, 144, 256, 3];
+        } else {
+            this.inputShape = [1, 3, 144, 256];
+        }
 
         // Load the weights, bias and info files.
         const weightsResponse = await fetch(
@@ -156,9 +174,17 @@ export class SelfieSegmentationLandscape {
             {dataType: this.dataType_, shape: []},
             new this.ArrayType_([0.1666666716337204]),
         );
+   
+        let modelInput = input;
+        if (this.needs2DTensor) {
+            console.log('Reshaping input for NHWC layout on MacOS');
+            // For NHWC layout on MacOS, reshape input from [N*H, W*C] to 4D shape [N, H, W, C].
+            let modelInputShape = [1, 144, 256, 3];
+            modelInput = this.builder_.reshape(input, modelInputShape);
+        }
 
         // name: mul_1 (contains conv0) Conv__158
-        const subGraphA0 = await this.buildSubGraphA_(input, 0, {
+        const subGraphA0 = await this.buildSubGraphA_(modelInput, 0, {
             strides,
             padding: [0, 1, 0, 1],
         });
@@ -470,11 +496,11 @@ export class SelfieSegmentationLandscape {
 
         // name: activation_10
         const sigmoid = this.builder_.sigmoid(convTranspose);
-        if (this.layout === 'nhwc') {
-            return sigmoid;
-        } else {
+
+        if (this.needs2DTensor || this.layout === 'nchw') {
             return this.builder_.reshape(sigmoid, this.outputShape_);
         }
+        return sigmoid;
     }
 
     async getInputBuffer() {
