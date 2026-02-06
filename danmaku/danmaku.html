@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Extreme Density Danmaku with Toggle</title>
+    
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #1a1a1a; color: white; display: flex; flex-direction: column; align-items: center; }
+        .wang-demo { width: 900px; margin: 20px auto; }
+        
+        #wang-container__wrapper {
+            width: 100%;
+            height: 500px;
+            position: relative;
+            overflow: hidden;
+            background: #000;
+            border-radius: 8px;
+        }
+        
+        #wang-container {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            z-index: 10;
+            pointer-events: none;
+            transition: opacity 0.3s ease; /* Smooth fade when toggling */
+        }
+        
+        /* Class to hide danmaku */
+        .danmaku-hidden {
+            opacity: 0 !important;
+            visibility: hidden;
+        }
+        
+        .wang-barrage-item {
+            position: absolute;
+            top: 0;
+            left: 100%;
+            white-space: nowrap;
+            font-weight: 900;
+            font-size: 22px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.9);
+            will-change: transform;
+        }
+        
+        #video { width: 100%; height: 100%; display: block; }
+
+        .wang-manage {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+            width: 100%;
+            flex-wrap: wrap;
+        }
+        
+        .controls-row { width: 100%; display: flex; gap: 10px; align-items: center; }
+        
+        input { flex: 1; padding: 12px; border-radius: 4px; border: none; background: #333; color: white; }
+        button { padding: 10px 15px; cursor: pointer; border-radius: 4px; border: none; background: #ff4757; color: white; font-weight: bold; transition: 0.2s; }
+        button:hover { opacity: 0.8; }
+        
+        #toggle-btn { background: #535c68; }
+        #clear-btn { background: #f0932b; }
+        #fullscreen-btn { background: #2f3542; }
+
+        .switch-label { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
+    </style>
+</head>
+
+<body>
+    <h1>DANMAKU CONTROL CENTER</h1>
+    <div class="wang-demo">
+        <div id="wang-container__wrapper">
+            <video id="video" src="video.mp4" controls loop></video>
+            <div id="wang-container"></div>
+        </div>
+
+        <div class="wang-manage">
+            <div class="controls-row">
+                <input type="text" id="wang-manage-input" placeholder="Type a message...">
+                <button id="wang-manage-btn">Emit</button>
+            </div>
+            <div class="controls-row">
+                <button id="toggle-btn">Disable Danmaku</button>
+                <button id="clear-btn">Clear Screen</button>
+                <button id="fullscreen-btn">Fullscreen</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class Barrage {
+            static random(start, end) { return start + (Math.random() * (end - start)); }
+            static animate(obj) {
+                obj.distance -= obj.speed; 
+                obj.divNode.style.transform = `translateX(${obj.distance}px)`;
+                if (Math.abs(obj.distance) < obj.width + obj.left) {
+                    obj.timer = requestAnimationFrame(() => Barrage.animate(obj));
+                } else {
+                    obj.destroy();
+                }
+            }
+            constructor({text}) {
+                this.text = text;
+                this.speed = Barrage.random(3, 7);
+                this.timer = null;
+                this.divNode = null;
+            }
+            append(container) {
+                const divNode = document.createElement('div');
+                this.divNode = divNode;
+                divNode.innerHTML = this.text;
+                divNode.classList.add('wang-barrage-item');
+                const lanes = Math.floor(container.barrageWrapperHeight / 30); 
+                const lane = Math.floor(Math.random() * lanes);
+                divNode.style.top = `${(lane * 30) + 10}px`;
+                divNode.style.color = container.barrageColorArray[Math.floor(Math.random() * container.barrageColorArray.length)];
+                container.$container.appendChild(divNode);
+                this.width = divNode.offsetWidth;
+                this.left = container.barrageWrapperWidth;
+                this.distance = 0;
+                divNode.style.left = this.left + 'px';
+                container.barrageArray.push(this);
+                Barrage.animate(this);
+            }
+            destroy() {
+                cancelAnimationFrame(this.timer);
+                if (this.divNode && this.divNode.parentNode) this.divNode.parentNode.removeChild(this.divNode);
+                container.barrageArray = container.barrageArray.filter(i => i !== this);
+            }
+        }
+
+        class BarrageContainer {
+            constructor(wrapperId, containerId) {
+                this.$wrapper = document.querySelector(wrapperId);
+                this.$container = document.querySelector(containerId);
+                this.barrageArray = [];
+                this.isEnabled = true; // State for disabling
+                this.barrageColorArray = ['#ffffff', '#00ff00', '#ffff00', '#00ffff', '#ff69b4', '#ffa500', '#ff4757'];
+                this.updateSize();
+            }
+            updateSize() {
+                this.barrageWrapperWidth = this.$wrapper.offsetWidth;
+                this.barrageWrapperHeight = this.$wrapper.offsetHeight;
+            }
+            clearAll() {
+                [...this.barrageArray].forEach(b => b.destroy());
+            }
+        }
+
+        const container = new BarrageContainer('#wang-container__wrapper', '#wang-container');
+        const video = document.querySelector('#video');
+        const toggleBtn = document.querySelector('#toggle-btn');
+        const clearBtn = document.querySelector('#clear-btn');
+
+        function generateRandomText() {
+            const phrases = ['666666', 'WOW', 'LOL', 'OMG!!!', '🔥🔥🔥', 'Subscribed', 'Wait...', 'LUL', 'Epic', '2333333', 'PogChamp', 'Hype!'];
+            return phrases[Math.floor(Math.random() * phrases.length)];
+        }
+
+        function startSpawning() {
+            if (video.timer) clearInterval(video.timer);
+            video.timer = setInterval(() => {
+                if (!container.isEnabled) return; // Don't spawn if disabled
+                const count = Math.floor(Math.random() * 5) + 8;
+                for(let i = 0; i < count; i++) {
+                    setTimeout(() => {
+                        if (container.isEnabled && !video.paused) {
+                            new Barrage({ text: generateRandomText() }).append(container);
+                        }
+                    }, Math.random() * 400);
+                }
+            }, 300);
+        }
+
+        // --- BUTTON LOGIC ---
+
+        toggleBtn.onclick = () => {
+            container.isEnabled = !container.isEnabled;
+            const el = document.querySelector('#wang-container');
+            if (container.isEnabled) {
+                el.classList.remove('danmaku-hidden');
+                toggleBtn.textContent = "Disable Danmaku";
+                toggleBtn.style.background = "#535c68";
+            } else {
+                el.classList.add('danmaku-hidden');
+                toggleBtn.textContent = "Enable Danmaku";
+                toggleBtn.style.background = "#2ecc71";
+            }
+        };
+
+        clearBtn.onclick = () => container.clearAll();
+
+        video.onplay = () => startSpawning();
+        video.onpause = () => clearInterval(video.timer);
+
+        document.querySelector('#wang-manage-btn').onclick = () => {
+            const input = document.querySelector('#wang-manage-input');
+            if(!input.value) return;
+            new Barrage({ text: input.value }).append(container);
+            input.value = '';
+        };
+
+        document.querySelector('#fullscreen-btn').onclick = () => {
+            const wrapper = document.querySelector('#wang-container__wrapper');
+            if (!document.fullscreenElement) wrapper.requestFullscreen();
+            else document.exitFullscreen();
+        };
+
+        window.addEventListener('resize', () => container.updateSize());
+    </script>
+</body>
+</html>
