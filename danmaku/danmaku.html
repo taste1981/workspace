@@ -70,6 +70,11 @@
         .density-label { min-width: 90px; font-size: 14px; color: #ddd; }
         #density { flex: 1; }
         #density-value { min-width: 28px; text-align: right; font-variant-numeric: tabular-nums; color: #fff; }
+
+        /* Checkbox should not stretch like text inputs */
+        .controls-row input[type="checkbox"] { flex: 0 0 auto; width: auto; }
+        .hint { font-size: 12px; color: #bdbdbd; }
+        .status { font-size: 12px; color: #9cdcfe; min-width: 140px; text-align: right; }
     </style>
 </head>
 
@@ -95,6 +100,14 @@
                 <span class="density-label">Density</span>
                 <input type="range" id="density" min="0" max="5" step="1" value="1" />
                 <span id="density-value">1</span>
+            </div>
+            <div class="controls-row">
+                <label class="switch-label" for="require-charging">
+                    <input type="checkbox" id="require-charging" checked />
+                    Require charging for high density
+                </label>
+                <span class="hint">(forces Density=1 when on battery)</span>
+                <span class="status" id="battery-status"></span>
             </div>
         </div>
     </div>
@@ -166,14 +179,75 @@
         const densityInput = document.querySelector('#density');
         const densityValueEl = document.querySelector('#density-value');
 
-        // 0 = off, 1 = normal, higher = denser
-        let spawnDensity = Number(densityInput.value) || 1;
+        const requireChargingEl = document.querySelector('#require-charging');
+        const batteryStatusEl = document.querySelector('#battery-status');
 
-        densityValueEl.textContent = String(spawnDensity);
+        // 0 = off, 1 = normal, higher = denser (user's desired value)
+        let desiredDensity = Number(densityInput.value) || 1;
+
+        // Battery API state
+        let batteryManager = null;
+        let isCharging = true; // default to "charging" if API unavailable
+
+        function updateBatteryStatusText() {
+            if (!('getBattery' in navigator)) {
+                batteryStatusEl.textContent = 'Battery API: N/A';
+                return;
+            }
+            batteryStatusEl.textContent = isCharging ? 'Charging' : 'On battery';
+        }
+
+        function effectiveDensity() {
+            // If the option is enabled and the device is NOT charging, force density=1.
+            if (requireChargingEl.checked && !isCharging) return 1;
+            return desiredDensity;
+        }
+
+        function syncDensityUI() {
+            const eff = effectiveDensity();
+            densityValueEl.textContent = String(eff);
+        }
+
         densityInput.addEventListener('input', () => {
-            spawnDensity = Number(densityInput.value) || 0;
-            densityValueEl.textContent = String(spawnDensity);
+            desiredDensity = Number(densityInput.value) || 0;
+            syncDensityUI();
         });
+
+        requireChargingEl.addEventListener('change', () => {
+            syncDensityUI();
+        });
+
+        async function initBatteryWatcher() {
+            if (!('getBattery' in navigator)) {
+                isCharging = true;
+                updateBatteryStatusText();
+                syncDensityUI();
+                return;
+            }
+
+            try {
+                batteryManager = await navigator.getBattery();
+                isCharging = Boolean(batteryManager.charging);
+                updateBatteryStatusText();
+                syncDensityUI();
+
+                batteryManager.addEventListener('chargingchange', () => {
+                    isCharging = Boolean(batteryManager.charging);
+                    updateBatteryStatusText();
+                    syncDensityUI();
+                });
+            } catch {
+                // If permission/availability fails, behave as if charging so the feature doesn't block.
+                isCharging = true;
+                batteryStatusEl.textContent = 'Battery API: error';
+                syncDensityUI();
+            }
+        }
+
+        // init UI
+        updateBatteryStatusText();
+        syncDensityUI();
+        initBatteryWatcher();
 
         function generateRandomText() {
             const phrases = ['666666', 'WOW', 'LOL', 'OMG!!!', '🔥🔥🔥', 'Subscribed', 'Wait...', 'LUL', 'Epic', '2333333', 'PogChamp', 'Hype!'];
@@ -185,6 +259,8 @@
             video.timer = setInterval(() => {
                 if (!container.isEnabled) return; // Don't spawn if disabled
                 if (video.paused) return;
+
+                const spawnDensity = effectiveDensity();
                 if (spawnDensity <= 0) return;
 
                 const baseCount = Math.floor(Math.random() * 5) + 8; // 8..12
@@ -193,7 +269,9 @@
 
                 for (let i = 0; i < count; i++) {
                     setTimeout(() => {
-                        if (container.isEnabled && !video.paused && spawnDensity > 0) {
+                        // Re-check at spawn time in case charging state/option changes
+                        const dNow = effectiveDensity();
+                        if (container.isEnabled && !video.paused && dNow > 0) {
                             new Barrage({ text: generateRandomText() }).append(container);
                         }
                     }, Math.random() * 400);
