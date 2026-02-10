@@ -4,13 +4,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Extreme Density Danmaku with Toggle</title>
+    <title>Danmaku PnP measurement page</title>
     
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #1a1a1a; color: white; display: flex; flex-direction: column; align-items: center; }
-        .wang-demo { width: 900px; margin: 20px auto; }
+        .wpe-demo { width: 900px; margin: 20px auto; }
         
-        #wang-container__wrapper {
+        #wpe-container__wrapper {
             width: 100%;
             height: 500px;
             position: relative;
@@ -19,7 +19,7 @@
             border-radius: 8px;
         }
         
-        #wang-container {
+        #wpe-container {
             position: absolute;
             top: 0; left: 0; right: 0; bottom: 0;
             z-index: 10;
@@ -33,7 +33,7 @@
             visibility: hidden;
         }
         
-        .wang-barrage-item {
+        .wpe-barrage-item {
             position: absolute;
             top: 0;
             left: 100%;
@@ -46,7 +46,7 @@
         
         #video { width: 100%; height: 100%; display: block; }
 
-        .wang-manage {
+        .wpe-manage {
             margin-top: 20px;
             display: flex;
             gap: 10px;
@@ -65,26 +65,36 @@
         #fullscreen-btn { background: #2f3542; }
 
         .switch-label { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
+
+        /* Density control */
+        .density-label { min-width: 90px; font-size: 14px; color: #ddd; }
+        #density { flex: 1; }
+        #density-value { min-width: 28px; text-align: right; font-variant-numeric: tabular-nums; color: #fff; }
     </style>
 </head>
 
 <body>
     <h1>DANMAKU CONTROL CENTER</h1>
-    <div class="wang-demo">
-        <div id="wang-container__wrapper">
+    <div class="wpe-demo">
+        <div id="wpe-container__wrapper">
             <video id="video" src="video.mp4" controls loop></video>
-            <div id="wang-container"></div>
+            <div id="wpe-container"></div>
         </div>
 
-        <div class="wang-manage">
+        <div class="wpe-manage">
             <div class="controls-row">
-                <input type="text" id="wang-manage-input" placeholder="Type a message...">
-                <button id="wang-manage-btn">Emit</button>
+                <input type="text" id="wpe-manage-input" placeholder="Type a message...">
+                <button id="wpe-manage-btn">Emit</button>
             </div>
             <div class="controls-row">
                 <button id="toggle-btn">Disable Danmaku</button>
                 <button id="clear-btn">Clear Screen</button>
                 <button id="fullscreen-btn">Fullscreen</button>
+            </div>
+            <div class="controls-row">
+                <span class="density-label">Density</span>
+                <input type="range" id="density" min="0" max="5" step="1" value="1" />
+                <span id="density-value">1</span>
             </div>
         </div>
     </div>
@@ -111,7 +121,7 @@
                 const divNode = document.createElement('div');
                 this.divNode = divNode;
                 divNode.innerHTML = this.text;
-                divNode.classList.add('wang-barrage-item');
+                divNode.classList.add('wpe-barrage-item');
                 const lanes = Math.floor(container.barrageWrapperHeight / 30); 
                 const lane = Math.floor(Math.random() * lanes);
                 divNode.style.top = `${(lane * 30) + 10}px`;
@@ -149,10 +159,21 @@
             }
         }
 
-        const container = new BarrageContainer('#wang-container__wrapper', '#wang-container');
+        const container = new BarrageContainer('#wpe-container__wrapper', '#wpe-container');
         const video = document.querySelector('#video');
         const toggleBtn = document.querySelector('#toggle-btn');
         const clearBtn = document.querySelector('#clear-btn');
+        const densityInput = document.querySelector('#density');
+        const densityValueEl = document.querySelector('#density-value');
+
+        // 0 = off, 1 = normal, higher = denser
+        let spawnDensity = Number(densityInput.value) || 1;
+
+        densityValueEl.textContent = String(spawnDensity);
+        densityInput.addEventListener('input', () => {
+            spawnDensity = Number(densityInput.value) || 0;
+            densityValueEl.textContent = String(spawnDensity);
+        });
 
         function generateRandomText() {
             const phrases = ['666666', 'WOW', 'LOL', 'OMG!!!', '🔥🔥🔥', 'Subscribed', 'Wait...', 'LUL', 'Epic', '2333333', 'PogChamp', 'Hype!'];
@@ -163,10 +184,16 @@
             if (video.timer) clearInterval(video.timer);
             video.timer = setInterval(() => {
                 if (!container.isEnabled) return; // Don't spawn if disabled
-                const count = Math.floor(Math.random() * 5) + 8;
-                for(let i = 0; i < count; i++) {
+                if (video.paused) return;
+                if (spawnDensity <= 0) return;
+
+                const baseCount = Math.floor(Math.random() * 5) + 8; // 8..12
+                // Scale by density and clamp to protect performance
+                const count = Math.min(200, Math.max(0, Math.round(baseCount * spawnDensity)));
+
+                for (let i = 0; i < count; i++) {
                     setTimeout(() => {
-                        if (container.isEnabled && !video.paused) {
+                        if (container.isEnabled && !video.paused && spawnDensity > 0) {
                             new Barrage({ text: generateRandomText() }).append(container);
                         }
                     }, Math.random() * 400);
@@ -178,7 +205,7 @@
 
         toggleBtn.onclick = () => {
             container.isEnabled = !container.isEnabled;
-            const el = document.querySelector('#wang-container');
+            const el = document.querySelector('#wpe-container');
             if (container.isEnabled) {
                 el.classList.remove('danmaku-hidden');
                 toggleBtn.textContent = "Disable Danmaku";
@@ -195,15 +222,15 @@
         video.onplay = () => startSpawning();
         video.onpause = () => clearInterval(video.timer);
 
-        document.querySelector('#wang-manage-btn').onclick = () => {
-            const input = document.querySelector('#wang-manage-input');
+        document.querySelector('#wpe-manage-btn').onclick = () => {
+            const input = document.querySelector('#wpe-manage-input');
             if(!input.value) return;
             new Barrage({ text: input.value }).append(container);
             input.value = '';
         };
 
         document.querySelector('#fullscreen-btn').onclick = () => {
-            const wrapper = document.querySelector('#wang-container__wrapper');
+            const wrapper = document.querySelector('#wpe-container__wrapper');
             if (!document.fullscreenElement) wrapper.requestFullscreen();
             else document.exitFullscreen();
         };
