@@ -132,8 +132,6 @@ class WebGPURenderer {
 
     if (useInterop) {
       this.device.queue.submit([commandEncoder.finish()]);
-      // Wait until the GPU has completed the submitted work before destroying the buffer
-      await this.device.queue.onSubmittedWorkDone();
       destTexture.buffer.destroy();
 
       await this.segmenter.segmentGPUBuffer();
@@ -153,8 +151,6 @@ class WebGPURenderer {
         [this.segmentationWidth, this.segmentationHeight, 1]
       );
       this.device.queue.submit([copyCommandEncoder.finish()]);
-      // Wait for the copy to finish before destroying the output buffer
-      await this.device.queue.onSubmittedWorkDone();
       outputBuffer.destroy();
 
       return this.maskTexture;
