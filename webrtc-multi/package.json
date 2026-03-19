@@ -1,0 +1,22 @@
+{
+  "name": "webrtc-multi",
+  "version": "2.0.0",
+  "description": "Multi-party WebRTC video call (up to 9 participants) — SFU architecture",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "build": "esbuild public/js/main.js --bundle --outfile=public/dist/bundle.js --format=iife --platform=browser --target=es2020",
+    "start": "npm run build && node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "mediasoup": "^3.14.0",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "mediasoup-client": "^3.7.0",
+    "socket.io-client": "^4.7.5"
+  }
+}
