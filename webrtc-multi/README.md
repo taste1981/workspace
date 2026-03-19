@@ -61,8 +61,8 @@ npm --version    # should print 10.x.x or later
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/<your-username>/<your-repo>.git
-cd <your-repo>/webrtc-multi
+git clone https://github.com/taste1981/workspace.git
+cd workspace/webrtc-multi
 ```
 
 ### 2. Configure npm proxy (corporate network)
@@ -207,7 +207,7 @@ Creator Browser                    mediasoup SFU                    Joiner Brows
 │             │◄── forward ─────│              │◄── send ───────│ 9× H.264 360p    │
 │ receives    │                  │              │                 │                  │
 │ 9×360p      │                  └──────────────┘                 └─────────────────┘
-└─────────────┘                                      
+└─────────────┘                                    
 ```
 
 Each side maintains only **2 WebRTC transports** (1 send + 1 receive) regardless of stream count.
