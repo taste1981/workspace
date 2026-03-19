@@ -11,6 +11,7 @@ const $landingError  = document.getElementById('landing-error');
 const $roomIdDisplay = document.getElementById('room-id-display');
 const $participantCount = document.getElementById('participant-count');
 const $videoGrid     = document.getElementById('video-grid');
+const $localOverlay  = document.getElementById('local-overlay');
 const $btnCopy       = document.getElementById('btn-copy');
 const $btnMic        = document.getElementById('btn-mic');
 const $btnCam        = document.getElementById('btn-cam');
@@ -18,7 +19,7 @@ const $btnScreen     = document.getElementById('btn-screen');
 const $btnLeave      = document.getElementById('btn-leave');
 
 /* ── Constants ── */
-const JOINER_STREAM_COUNT = 8;
+const JOINER_STREAM_COUNT = 9;
 
 /* ── State ── */
 let signaling = null;
@@ -50,7 +51,7 @@ function showCallView(id) {
   $roomIdDisplay.textContent = roomId;
   $landing.classList.add('hidden');
   $call.classList.remove('hidden');
-  updateGrid();
+  updateLayout();
 }
 
 function showLandingView() {
@@ -59,15 +60,18 @@ function showLandingView() {
   clearError();
 }
 
-function updateGrid() {
-  const count = $videoGrid.children.length;
-  $participantCount.textContent = `${count} stream${count !== 1 ? 's' : ''}`;
-  $videoGrid.setAttribute('data-count', count);
+function updateLayout() {
+  const gridCount = $videoGrid.children.length;
+  const overlayCount = $localOverlay.children.length;
+  const total = gridCount + overlayCount;
+  $participantCount.textContent = `${total} stream${total !== 1 ? 's' : ''}`;
+  $videoGrid.setAttribute('data-count', gridCount);
+  $localOverlay.setAttribute('data-count', overlayCount);
 }
 
 /* ── Video tile management ── */
 
-function createVideoTile(id, stream, label, isLocal = false) {
+function createVideoTile(id, stream, label, isLocal = false, container = $videoGrid) {
   if (document.getElementById(`tile-${id}`)) return;
   const tile = document.createElement('div');
   tile.classList.add('video-tile');
@@ -86,8 +90,8 @@ function createVideoTile(id, stream, label, isLocal = false) {
 
   tile.appendChild(video);
   tile.appendChild(lbl);
-  $videoGrid.appendChild(tile);
-  updateGrid();
+  container.appendChild(tile);
+  updateLayout();
 }
 
 function removeVideoTile(id) {
@@ -97,11 +101,12 @@ function removeVideoTile(id) {
     if (video) video.srcObject = null;
     tile.remove();
   }
-  updateGrid();
+  updateLayout();
 }
 
 function removeAllTiles() {
   $videoGrid.innerHTML = '';
+  $localOverlay.innerHTML = '';
 }
 
 /* ── getUserMedia ── */
@@ -161,7 +166,7 @@ async function setupSfu() {
     }
     producerTileMap.clear();
     remoteVideoIndex = 0;
-    updateGrid();
+    updateLayout();
   });
 
   signaling.onNewProducer(async ({ producerId, peerId, kind }) => {
@@ -193,7 +198,7 @@ async function handleCreate() {
 
     const id = await signaling.createRoom();
     showCallView(id);
-    createVideoTile('local', localStream, 'You (720p)', true);
+    createVideoTile('local', localStream, 'You (720p)', true, $localOverlay);
 
     await sfuClient.init();
     await sfuClient.createTransports();
@@ -242,7 +247,7 @@ async function handleJoin() {
 
       // Show a local tile for each stream
       const stream = new MediaStream([clone]);
-      createVideoTile(`local-${i}`, stream, `Local #${i + 1} (360p)`, true);
+      createVideoTile(`local-${i}`, stream, `Local #${i + 1} (360p)`, true, $localOverlay);
     }
 
     // Consume existing producers (the creator's streams)

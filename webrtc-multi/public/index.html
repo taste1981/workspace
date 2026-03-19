@@ -11,7 +11,7 @@
   <div id="landing">
     <div class="landing-card">
       <h1>WebRTC Group Call</h1>
-      <p class="subtitle">2 pages &middot; Creator sends 1&times;720p, Joiner sends 8&times;360p &middot; H.264</p>
+      <p class="subtitle">2 pages &middot; Creator sends 1&times;720p, Joiner sends 9&times;360p &middot; H.264</p>
 
       <button id="btn-create" class="btn btn-primary">Create Room</button>
 
@@ -34,7 +34,10 @@
       <span id="participant-count"></span>
     </div>
 
-    <div id="video-grid"></div>
+    <div id="call-content">
+      <div id="video-grid"></div>
+      <div id="local-overlay"></div>
+    </div>
 
     <div id="controls">
       <button id="btn-mic" class="btn-ctrl" title="Toggle microphone">

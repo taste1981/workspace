@@ -8,9 +8,11 @@ A 2-page WebRTC video call application using an SFU (Selective Forwarding Unit) 
 | Page            | Role    | Sends              | Resolution | Codec              |
 | --------------- | ------- | ------------------ | ---------- | ------------------ |
 | **Create Room** | Creator | 1 video + 1 audio  | 1280×720  | H.264 Main Profile |
-| **Join Room**   | Joiner  | 8 videos + 1 audio | 640×360   | H.264 Main Profile |
+| **Join Room**   | Joiner  | 9 videos + 1 audio | 640×360   | H.264 Main Profile |
 
-Both pages display a 3×3 grid of 9 video streams. The creator sees 1 local + 8 remote; the joiner sees 8 local + 1 remote.
+The creator sees 1 local 720p tile + 9 remote 360p tiles (10 total). The joiner sees 9 local 360p tiles + 1 remote 720p tile (10 total).
+
+> **Deployment note:** The SFU server can run on a separate host — it should not be run on the DUT (Device Under Test). Running the server on a different machine keeps the DUT dedicated to the browser workload being tested.
 
 ## Prerequisites
 
@@ -79,15 +81,17 @@ npm config delete proxy
 npm config delete https-proxy
 ```
 
-### 3. Install dependencies
+### 3. Install dependencies (one-time)
 
 ```bash
 npm install
 ```
 
+This only needs to be done once. After the initial install, you can start the server directly with `npm start` or `npm run dev`.
+
 > **Note:** mediasoup includes a native C++ worker binary. During `npm install`, it attempts to download a prebuilt binary from GitHub. If this fails (e.g., due to network restrictions), it falls back to building locally, which requires Python 3 and a C++ toolchain. If the automated download times out, you can manually download the prebuilt worker:
 >
-> **Windows:** (execute under the root dir of `webrtc-multi`
+> **Windows:** (execute under the root dir of `webrtc-multi`)
 >
 > ```powershell
 > $url = "https://github.com/versatica/mediasoup/releases/download/3.19.18/mediasoup-worker-3.19.18-win32-x64.tgz"
@@ -166,12 +170,12 @@ google-chrome \
 
 ## Usage
 
-1. Open Chrome (with the flags above) and go to `http://<server-ip>:3000`
+1. On DUT, open Chrome (with the flags above) and go to `http://<server-ip>:3000`
 2. Click **Create Room** — your camera activates and a 6-character room ID appears
-3. Open a second Chrome window/tab and go to the same URL
+3. On another device, Open a second Chrome window/tab and go to the same URL
 4. Enter the room ID and click **Join**
-5. The creator's page shows 1 local 720p tile + 8 remote 360p tiles
-6. The joiner's page shows 8 local 360p tiles + 1 remote 720p tile
+5. The creator's page shows 1 local 720p tile + 9 remote 360p tiles
+6. The joiner's page shows 9 local 360p tiles + 1 remote 720p tile
 
 ### Controls
 
@@ -200,10 +204,10 @@ Creator Browser                    mediasoup SFU                    Joiner Brows
 ┌─────────────┐                  ┌──────────────┐                 ┌─────────────────┐
 │ 1× H.264    │── send ────────►│              │── forward ────►│ receives 1×720p  │
 │   720p      │                  │   Router     │                 │                  │
-│             │◄── forward ─────│              │◄── send ───────│ 8× H.264 360p    │
+│             │◄── forward ─────│              │◄── send ───────│ 9× H.264 360p    │
 │ receives    │                  │              │                 │                  │
-│ 8×360p      │                  └──────────────┘                 └─────────────────┘
-└─────────────┘                                                
+│ 9×360p      │                  └──────────────┘                 └─────────────────┘
+└─────────────┘                                      
 ```
 
 Each side maintains only **2 WebRTC transports** (1 send + 1 receive) regardless of stream count.
