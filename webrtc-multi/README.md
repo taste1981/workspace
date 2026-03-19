@@ -172,7 +172,7 @@ google-chrome \
 
 1. On DUT, open Chrome (with the flags above) and go to `http://<server-ip>:3000`
 2. Click **Create Room** — your camera activates and a 6-character room ID appears
-3. On another device, Open a second Chrome window/tab and go to the same URL
+3. On another device, Open a second Chrome window/tab (with the flags above) and go to the same URL
 4. Enter the room ID and click **Join**
 5. The creator's page shows 1 local 720p tile + 9 remote 360p tiles
 6. The joiner's page shows 9 local 360p tiles + 1 remote 720p tile
