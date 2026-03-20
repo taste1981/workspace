@@ -59,7 +59,7 @@ Announced IP: 10.2.3.4
 
 1. Copy the same `WebRTC-Multi-Client.exe` to a **different machine**.
 
-2. Run the same command:
+2. Run the same command (replace `10.2.3.4` with your **Announced IP**):
   
 ```powershell
 .\WebRTC-Multi-Client.exe --server-url=http://10.2.3.4:3000
@@ -67,8 +67,8 @@ Announced IP: 10.2.3.4
 
 3. In the application:
 
-- Enter the \*\*Room ID\*\* from Step 2.
-- Click \*\*"Join"\*\* to enter the meeting.
+- Enter the **Room ID** from Step 2.
+- Click **"Join"** to enter the meeting.
 - This client will send 9 video streams at 360p.
 
 
