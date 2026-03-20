@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WebRTC Multi-Party Call</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- Landing View -->
+  <div id="landing">
+    <div class="landing-card">
+      <h1>WebRTC Group Call</h1>
+      <p class="subtitle">2 pages &middot; Creator sends 1&times;720p, Joiner sends 9&times;360p &middot; H.264</p>
+
+      <button id="btn-create" class="btn btn-primary">Create Room</button>
+
+      <div class="divider"><span>or</span></div>
+
+      <div class="join-group">
+        <input id="input-room" type="text" maxlength="6" placeholder="Enter room ID" autocomplete="off">
+        <button id="btn-join" class="btn btn-secondary">Join</button>
+      </div>
+
+      <p id="landing-error" class="error hidden"></p>
+    </div>
+  </div>
+
+  <!-- Call View -->
+  <div id="call" class="hidden">
+    <div id="room-bar">
+      <span>Room: <strong id="room-id-display"></strong></span>
+      <button id="btn-copy" class="btn-icon" title="Copy room ID">&#x1F4CB;</button>
+      <span id="participant-count"></span>
+    </div>
+
+    <div id="call-content">
+      <div id="video-grid"></div>
+      <div id="local-overlay"></div>
+    </div>
+
+    <div id="controls">
+      <button id="btn-mic" class="btn-ctrl" title="Toggle microphone">
+        <span class="icon">&#x1F3A4;</span>
+        <span class="label">Mic</span>
+      </button>
+      <button id="btn-cam" class="btn-ctrl" title="Toggle camera">
+        <span class="icon">&#x1F4F7;</span>
+        <span class="label">Cam</span>
+      </button>
+      <button id="btn-screen" class="btn-ctrl" title="Share screen">
+        <span class="icon">&#x1F5A5;</span>
+        <span class="label">Screen</span>
+      </button>
+      <button id="btn-leave" class="btn-ctrl btn-leave" title="Leave call">
+        <span class="icon">&#x1F4DE;</span>
+        <span class="label">Leave</span>
+      </button>
+    </div>
+  </div>
+
+  <script src="dist/bundle.js"></script>
+</body>
+</html>
