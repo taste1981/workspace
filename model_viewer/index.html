@@ -57,6 +57,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .port .ptype { font-size: 9px; color: #999; }
 .conn { font-size: 11px; padding: 2px 0; cursor: pointer; color: #1565c0; }
 .conn:hover { text-decoration: underline; }
+.const-val { max-height: 400px; overflow-y: auto; padding: 4px 0; }
 
 .welcome { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; color: #bbb; }
 .welcome .icon { font-size: 56px; margin-bottom: 12px; opacity: 0.4; }
@@ -1069,7 +1070,7 @@ function tflToGraph(m) {
         }
         nodes.push({ id: cid, name: t.name||`const_${ti}`, type: 'Constant', category: CAT.const,
           attrs: cattrs, inputs: [], outputs: [{ name: t.name, type: typeStr, shape: t.shape.map(String) }],
-          extra: { tensorIdx: ti, quant: t.quant } });
+          extra: { tensorIdx: ti, quant: t.quant, bufferIdx: t.buffer, tensorType: t.type, tensorShape: t.shape } });
         tensorProducer[ti] = { nodeId: cid, portIdx: 0 };
         constInputs.push(ti);
       }
@@ -1445,6 +1446,154 @@ function showModelProps() {
   details.innerHTML = h;
 }
 
+// Decode TFLite buffer data into a typed array of values
+function decodeTflBuffer(data, type) {
+  if (!data || data.length === 0) return null;
+  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  switch (type) {
+    case 0: { // float32
+      const n = Math.floor(data.length / 4), v = new Float32Array(n);
+      for (let i = 0; i < n; i++) v[i] = dv.getFloat32(i * 4, true);
+      return v;
+    }
+    case 1: { // float16 -> decode to float32
+      const n = Math.floor(data.length / 2), v = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const h = dv.getUint16(i * 2, true);
+        const s = (h >> 15) & 1, e = (h >> 10) & 0x1f, f = h & 0x3ff;
+        if (e === 0) v[i] = (s ? -1 : 1) * Math.pow(2, -14) * (f / 1024);
+        else if (e === 31) v[i] = f ? NaN : (s ? -Infinity : Infinity);
+        else v[i] = (s ? -1 : 1) * Math.pow(2, e - 15) * (1 + f / 1024);
+      }
+      return v;
+    }
+    case 2: { // int32
+      const n = Math.floor(data.length / 4), v = new Int32Array(n);
+      for (let i = 0; i < n; i++) v[i] = dv.getInt32(i * 4, true);
+      return v;
+    }
+    case 3: { // uint8
+      return new Uint8Array(data);
+    }
+    case 4: { // int64
+      const n = Math.floor(data.length / 8), v = [];
+      for (let i = 0; i < n; i++) {
+        const lo = dv.getUint32(i * 8, true), hi = dv.getInt32(i * 8 + 4, true);
+        v.push(hi * 0x100000000 + lo);
+      }
+      return v;
+    }
+    case 6: { // bool
+      const v = new Uint8Array(data.length);
+      for (let i = 0; i < data.length; i++) v[i] = data[i] ? 1 : 0;
+      return v;
+    }
+    case 7: { // int16
+      const n = Math.floor(data.length / 2), v = new Int16Array(n);
+      for (let i = 0; i < n; i++) v[i] = dv.getInt16(i * 2, true);
+      return v;
+    }
+    case 9: { // int8
+      const v = new Int8Array(data.length);
+      for (let i = 0; i < data.length; i++) v[i] = dv.getInt8(i);
+      return v;
+    }
+    case 10: { // float64
+      const n = Math.floor(data.length / 8), v = new Float64Array(n);
+      for (let i = 0; i < n; i++) v[i] = dv.getFloat64(i * 8, true);
+      return v;
+    }
+    case 12: { // uint64
+      const n = Math.floor(data.length / 8), v = [];
+      for (let i = 0; i < n; i++) {
+        const lo = dv.getUint32(i * 8, true), hi = dv.getUint32(i * 8 + 4, true);
+        v.push(hi * 0x100000000 + lo);
+      }
+      return v;
+    }
+    case 15: { // uint32
+      const n = Math.floor(data.length / 4), v = new Uint32Array(n);
+      for (let i = 0; i < n; i++) v[i] = dv.getUint32(i * 4, true);
+      return v;
+    }
+    case 16: { // uint16
+      const n = Math.floor(data.length / 2), v = new Uint16Array(n);
+      for (let i = 0; i < n; i++) v[i] = dv.getUint16(i * 2, true);
+      return v;
+    }
+    case 18: { // bfloat16 -> decode to float32
+      const n = Math.floor(data.length / 2), v = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const bf = dv.getUint16(i * 2, true);
+        const tmp = new DataView(new ArrayBuffer(4));
+        tmp.setUint32(0, bf << 16, false);
+        v[i] = tmp.getFloat32(0, false);
+      }
+      return v;
+    }
+    default: return null;
+  }
+}
+
+// Format decoded values for display, respecting shape for multi-dim tensors
+function formatTensorValues(values, shape, maxPreview) {
+  if (!values || values.length === 0) return '<span style="color:#999;">empty</span>';
+  const total = values.length;
+  maxPreview = maxPreview || 200;
+  const isFloat = values instanceof Float32Array || values instanceof Float64Array;
+
+  function fmtVal(v) {
+    if (isFloat) {
+      if (Number.isNaN(v)) return 'NaN';
+      if (!Number.isFinite(v)) return v > 0 ? 'Inf' : '-Inf';
+      // Show compact representation
+      if (Number.isInteger(v) && Math.abs(v) < 1e6) return String(v);
+      return v.toPrecision(6).replace(/\.?0+$/, '');
+    }
+    return String(v);
+  }
+
+  // For scalar
+  if (shape.length === 0 || (shape.length === 1 && shape[0] <= 1 && total <= 1)) {
+    return `<span style="font-family:monospace;font-size:11px;">${H(fmtVal(values[0]))}</span>`;
+  }
+
+  // For 1-D
+  if (shape.length === 1 || shape.reduce((a,b) => a*b, 1) === total) {
+    if (total <= maxPreview) {
+      const strs = [];
+      for (let i = 0; i < total; i++) strs.push(fmtVal(values[i]));
+      return `<span style="font-family:monospace;font-size:10px;word-break:break-all;">[${strs.join(', ')}]</span>`;
+    } else {
+      const head = [], tail = [];
+      const headN = Math.min(Math.floor(maxPreview / 2), 100);
+      const tailN = Math.min(maxPreview - headN, 100);
+      for (let i = 0; i < headN; i++) head.push(fmtVal(values[i]));
+      for (let i = total - tailN; i < total; i++) tail.push(fmtVal(values[i]));
+      return `<span style="font-family:monospace;font-size:10px;word-break:break-all;">[${head.join(', ')},<br><span style="color:#999;"> ... ${total - headN - tailN} more values ...</span><br>${tail.join(', ')}]</span>`;
+    }
+  }
+
+  // For multi-dimensional: show as nested brackets for first few rows
+  const lastDim = shape[shape.length - 1];
+  const numRows = Math.floor(total / lastDim);
+  const maxRows = Math.min(numRows, Math.floor(maxPreview / Math.min(lastDim, 20)));
+  let html = '<div style="font-family:monospace;font-size:10px;max-height:300px;overflow-y:auto;word-break:break-all;">';
+  for (let r = 0; r < maxRows; r++) {
+    const start = r * lastDim;
+    const rowVals = [];
+    const showN = Math.min(lastDim, 20);
+    for (let c = 0; c < showN; c++) rowVals.push(fmtVal(values[start + c]));
+    const suffix = lastDim > showN ? ', ...' : '';
+    html += `[${rowVals.join(', ')}${suffix}]<br>`;
+  }
+  if (numRows > maxRows) {
+    html += `<span style="color:#999;">... ${numRows - maxRows} more rows (${total} total values)</span>`;
+  }
+  html += '</div>';
+  return html;
+}
+
 function showNodeDetails(id) {
   const node = graph.nodes.find(n => n.id === id);
   if (!node) return;
@@ -1517,6 +1666,24 @@ function showNodeDetails(id) {
     if (q.max?.length) h += `<tr><td>max</td><td>${H(q.max.join(', '))}</td></tr>`;
     if (q.quantized_dimension) h += `<tr><td>axis</td><td>${q.quantized_dimension}</td></tr>`;
     h += '</table></div>';
+  }
+
+  // Constant value display (TFLite)
+  if (node.extra?.bufferIdx !== undefined && tflParsed) {
+    const bufData = tflParsed.buffers[node.extra.bufferIdx]?.data;
+    if (bufData && bufData.length > 0) {
+      const decoded = decodeTflBuffer(bufData, node.extra.tensorType);
+      if (decoded) {
+        const shape = node.extra.tensorShape || [];
+        const total = decoded.length || (Array.isArray(decoded) ? decoded.length : 0);
+        const typeStr = TFL_TYPES[node.extra.tensorType] || 'unknown';
+        h += '<div class="sec"><div class="lbl">Value <span style="font-size:9px;color:#aaa;text-transform:none;">(' + H(typeStr) + ', ' + total + ' elements, ' + bufData.length + ' bytes)</span></div>';
+        h += '<div class="const-val">' + formatTensorValues(decoded, shape) + '</div>';
+        h += '</div>';
+      } else {
+        h += '<div class="sec"><div class="lbl">Value</div><div class="val" style="font-size:11px;color:#999;">Raw data: ' + bufData.length + ' bytes (type: ' + H(TFL_TYPES[node.extra.tensorType] || '?') + ')</div></div>';
+      }
+    }
   }
 
   // Tensor details for TFLite operator nodes
