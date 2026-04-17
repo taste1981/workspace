@@ -65,14 +65,14 @@ function onnxDecodeModel(buf, s, e) {
   while (p < e) {
     const [tag, p1] = pbReadVarint(buf, p); p = p1;
     const fn = tag >>> 3, wt = tag & 7;
-    if (wt === 0) { const [v, p2] = pbReadVarint(buf, p); p = p2; if (fn===1) m.ir_version=v; else if (fn===6) m.model_version=v; }
+    if (wt === 0) { const [v, p2] = pbReadVarint(buf, p); p = p2; if (fn===1) m.ir_version=v; else if (fn===5) m.model_version=v; }
     else if (wt === 2) { const [len, p2] = pbReadVarint(buf, p); p = p2; const end = p + len;
-      if (fn===3) m.producer_name = pbUTF8(buf,p,end);
-      else if (fn===4) m.producer_version = pbUTF8(buf,p,end);
-      else if (fn===5) m.domain = pbUTF8(buf,p,end);
-      else if (fn===7) m.doc_string = pbUTF8(buf,p,end);
-      else if (fn===8) m.graph = onnxDecodeGraph(buf,p,end);
-      else if (fn===2) m.opset_import.push(onnxDecodeOpset(buf,p,end));
+      if (fn===2) m.producer_name = pbUTF8(buf,p,end);
+      else if (fn===3) m.producer_version = pbUTF8(buf,p,end);
+      else if (fn===4) m.domain = pbUTF8(buf,p,end);
+      else if (fn===6) m.doc_string = pbUTF8(buf,p,end);
+      else if (fn===7) m.graph = onnxDecodeGraph(buf,p,end);
+      else if (fn===8) m.opset_import.push(onnxDecodeOpset(buf,p,end));
       else if (fn===14) m.metadata.push(onnxDecodeStrEntry(buf,p,end));
       p = end;
     } else if (wt === 5) { p += 4; } else if (wt === 1) { p += 8; }
@@ -94,7 +94,7 @@ function onnxDecodeGraph(buf, s, e) {
       else if (fn===5) g.initializer.push(onnxDecodeTensor(buf,p,end));
       else if (fn===11) g.input.push(onnxDecodeValueInfo(buf,p,end));
       else if (fn===12) g.output.push(onnxDecodeValueInfo(buf,p,end));
-      else if (fn===15) g.value_info.push(onnxDecodeValueInfo(buf,p,end));
+      else if (fn===13) g.value_info.push(onnxDecodeValueInfo(buf,p,end));
       p = end;
     } else if (wt === 5) { p += 4; } else if (wt === 1) { p += 8; }
   }
@@ -113,8 +113,8 @@ function onnxDecodeNode(buf, s, e) {
       else if (fn===2) n.output.push(pbUTF8(buf,p,end));
       else if (fn===3) n.name = pbUTF8(buf,p,end);
       else if (fn===4) n.op_type = pbUTF8(buf,p,end);
-      else if (fn===7) n.doc_string = pbUTF8(buf,p,end);
-      else if (fn===13) n.domain = pbUTF8(buf,p,end);
+      else if (fn===6) n.doc_string = pbUTF8(buf,p,end);
+      else if (fn===7) n.domain = pbUTF8(buf,p,end);
       else if (fn===5) n.attribute.push(onnxDecodeAttr(buf,p,end));
       p = end;
     } else if (wt === 5) { p += 4; } else if (wt === 1) { p += 8; }
