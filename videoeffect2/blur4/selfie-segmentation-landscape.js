@@ -503,12 +503,12 @@ export class SelfieSegmentationLandscape {
         return sigmoid;
     }
 
-    async getInputBuffer() {
-        return await this.context_.exportToGPU(this.inputTensor_);
+    getInputBuffer() {
+        return this.context_.exportToGPU(this.inputTensor_);
     }
 
-    async getOutputBuffer() {
-        return await this.context_.exportToGPU(this.outputTensor_);
+    getOutputBuffer() {
+        return this.context_.exportToGPU(this.outputTensor_);
     }
 
     async build(outputOperand) {
