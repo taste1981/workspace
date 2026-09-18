@@ -239,22 +239,25 @@ self.onmessage = async (e) => {
           post({
             type: "log",
             level: "warn",
-            text: `codec '${msg.codec}' not supported by this browser's encoders`,
+            text: `codec '${msg.codec}' not supported by this browser (no HW or SW encoder/decoder)`,
           });
           post({ type: "compareDisabled" });
           break;
         }
         state.compare = createWebCodecsPipeline({
-          codec: resolved,
+          codec: resolved.codec,
+          encAccel: resolved.encAccel,
+          decAccel: resolved.decAccel,
           width: state.videoW,
           height: state.videoH,
           framerate: CODEC_PARAMS.fps,
           bitrateProvider,
         });
+        const accel = (a) => (a === "prefer-hardware" ? "HW" : a === "prefer-software" ? "SW" : "auto");
         post({
           type: "compareEnabled",
-          codec: resolved,
-          note: `compare codec ${msg.codec} -> ${resolved} (bitrate tracks MLVC's ${state.mode.mode === "cbr" ? "target" : "measured"} rate)`,
+          codec: resolved.codec,
+          note: `compare codec ${msg.codec} -> ${resolved.codec} (enc: ${accel(resolved.encAccel)}, dec: ${accel(resolved.decAccel)}; bitrate tracks MLVC's ${state.mode.mode === "cbr" ? "target" : "measured"} rate)`,
         });
         break;
       }

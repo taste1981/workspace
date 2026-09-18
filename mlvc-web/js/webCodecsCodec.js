@@ -11,27 +11,49 @@ const CODEC_CANDIDATES = {
   av1: ["av01.0.04M.08"],
 };
 
-export async function probeCodec(codecName, width, height, bitrate, framerate) {
-  if (typeof VideoEncoder === "undefined") return null;
-  for (const codec of CODEC_CANDIDATES[codecName] ?? []) {
+// Probe a codec family for BOTH the encoder and the decoder, preferring hardware
+// acceleration but falling back to software (VP8/VP9/AV1 hardware encoders are
+// far from universal; software fallback keeps the comparison working).
+const ACCEL_CASCADE = ["prefer-hardware", "prefer-software", "no-preference"];
+
+async function probe(isConfigSupported, config) {
+  for (const hardwareAcceleration of ACCEL_CASCADE) {
     try {
-      const res = await VideoEncoder.isConfigSupported({
-        codec,
-        width,
-        height,
-        bitrate,
-        framerate,
-        latencyMode: "quality",
-      });
-      if (res.supported) return codec;
+      const res = await isConfigSupported({ ...config, hardwareAcceleration });
+      if (res.supported) {
+        return hardwareAcceleration === "no-preference" ? undefined : hardwareAcceleration;
+      }
     } catch {
-      /* try next candidate */
+      /* try the next acceleration mode */
     }
   }
   return null;
 }
 
-export function createWebCodecsPipeline({ codec, width, height, framerate, bitrateProvider }) {
+export async function probeCodec(codecName, width, height, bitrate, framerate) {
+  if (typeof VideoEncoder === "undefined") return null;
+  for (const codec of CODEC_CANDIDATES[codecName] ?? []) {
+    const encAccel = await probe(VideoEncoder.isConfigSupported.bind(VideoEncoder), {
+      codec,
+      width,
+      height,
+      bitrate,
+      framerate,
+      latencyMode: "quality",
+    });
+    if (encAccel === null) continue;
+    const decAccel = await probe(VideoDecoder.isConfigSupported.bind(VideoDecoder), {
+      codec,
+      codedWidth: width,
+      codedHeight: height,
+    });
+    if (decAccel === null) continue;
+    return { codec, encAccel, decAccel };
+  }
+  return null;
+}
+
+export function createWebCodecsPipeline({ codec, encAccel, decAccel, width, height, framerate, bitrateProvider }) {
   let encoder = null;
   let decoder = null;
   let frameCount = 0;
@@ -62,6 +84,7 @@ export function createWebCodecsPipeline({ codec, width, height, framerate, bitra
               codedWidth: width,
               codedHeight: height,
               description: metadata.decoderConfig.description,
+              hardwareAcceleration: decAccel,
             });
             descriptionApplied = true;
           } catch {
@@ -91,6 +114,7 @@ export function createWebCodecsPipeline({ codec, width, height, framerate, bitra
       bitrate: initialBitrate,
       framerate,
       latencyMode: "quality",
+      hardwareAcceleration: encAccel, // resolved HW/SW preference (SW fallback allowed)
       // annexb: the decoder does not need a separate description entry
       avc: codec.startsWith("avc") ? { format: "annexb" } : undefined,
       hevc: codec.startsWith("hvc") ? { format: "annexb" } : undefined,
@@ -122,7 +146,7 @@ export function createWebCodecsPipeline({ codec, width, height, framerate, bitra
         }
       },
     });
-    decoder.configure({ codec, codedWidth: width, codedHeight: height });
+    decoder.configure({ codec, codedWidth: width, codedHeight: height, hardwareAcceleration: decAccel });
   }
 
   resetEncoder();
