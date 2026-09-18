@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MLVC in the browser — camera codec on CPU / GPU / NPU</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%230b6bcb'/><text x='8' y='12' font-size='10' text-anchor='middle' fill='white'>M</text></svg>">
+<style>
+  :root {
+    --bg: #10151b; --panel: #171e26; --line: #2a3441; --ink: #e6edf3; --muted: #8b98a5;
+    --accent: #38bdf8; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 "Segoe UI", system-ui, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px 18px;
+    border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 16px; margin: 0 12px 0 0; font-weight: 600; }
+  .badge { font-size: 11.5px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .badge.ok { color: var(--ok); border-color: var(--ok); }
+  .badge.warn { color: var(--warn); border-color: var(--warn); }
+  select, input, button { background: #10151b; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 10px; font: inherit; }
+  button { cursor: pointer; }
+  button.primary { background: #0c4a6e; border-color: #0369a1; font-weight: 600; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  label { color: var(--muted); font-size: 12px; display: flex; flex-direction: column; gap: 2px; }
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 14px 18px; max-width: 1500px; margin: 0 auto; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+  .panel h2 { margin: 0 0 8px; font-size: 13px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .4px; }
+  canvas { width: 100%; height: auto; background: #000; border-radius: 6px; display: block; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+  .stat { background: #10151b; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+  .stat .v { font-size: 17px; font-weight: 700; }
+  .stat .l { font-size: 11px; color: var(--muted); }
+  #qspark { width: 100%; height: 34px; display: block; }
+  .bucket { position: relative; height: 12px; background: #10151b; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .bucket .fill { position: absolute; top: 0; left: 0; bottom: 0; background: var(--accent); opacity: .8; }
+  .bucket .target { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--warn); }
+  .bucket .headroom { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--bad); }
+  #log { font-family: Consolas, monospace; font-size: 11.5px; color: var(--muted); max-height: 120px; overflow-y: auto; white-space: pre-wrap; }
+  #banner { padding: 10px 18px; background: #2a1a0a; color: var(--warn); border-bottom: 1px solid #5c3a10; font-size: 13px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>MLVC · browser codec</h1>
+  <span class="badge" id="epBadge">—</span>
+  <span class="badge" id="isoBadge">crossOriginIsolated: …</span>
+  <label>Resolution
+    <select id="resolution">
+      <option value="640x368">360p (640×368 model)</option>
+      <option value="1280x720" selected>720p (1280×720)</option>
+      <option value="1920x1088">1080p (1920×1088)</option>
+    </select>
+  </label>
+  <label>Device
+    <select id="device">
+      <option value="npu" selected>NPU (WebNN)</option>
+      <option value="gpu">GPU (WebGPU)</option>
+      <option value="cpu">CPU (WASM)</option>
+    </select>
+  </label>
+  <label>Mode
+    <select id="mode">
+      <option value="cbr" selected>CBR</option>
+      <option value="cq">CQ</option>
+    </select>
+  </label>
+  <label id="bitrateLabel">Bitrate (kbps)
+    <input id="bitrate" type="number" value="300" min="25" max="20000" step="25">
+  </label>
+  <label id="qLabel" class="hidden">q-index
+    <input id="qindex" type="number" value="42" min="0" max="63">
+  </label>
+  <button id="startBtn" class="primary">Start</button>
+  <button id="stopBtn" disabled>Stop</button>
+  <button id="iframeBtn" disabled>Force I-frame</button>
+  <button id="selftestBtn" title="Run 30 synthetic frames through the codec (no camera) to verify the pipeline at the selected resolution/device">Self-test</button>
+  <label><input type="checkbox" id="diffToggle"> diff ×5</label>
+</header>
+
+<div id="banner" class="hidden"></div>
+
+<main>
+  <section class="panel">
+    <h2>Camera input</h2>
+    <canvas id="origCanvas" width="1280" height="720"></canvas>
+  </section>
+  <section class="panel">
+    <h2>Decoded output (end-to-end)</h2>
+    <canvas id="recCanvas" width="1280" height="720"></canvas>
+  </section>
+  <section class="panel">
+    <h2>Live stats</h2>
+    <div class="stats">
+      <div class="stat"><div class="v" id="sFps">—</div><div class="l">end-to-end FPS</div></div>
+      <div class="stat"><div class="v" id="sEnc">—</div><div class="l">encoder ms</div></div>
+      <div class="stat"><div class="v" id="sDec">—</div><div class="l">decoder ms</div></div>
+      <div class="stat"><div class="v" id="sEnt">—</div><div class="l">entropy (rANS) ms</div></div>
+      <div class="stat"><div class="v" id="sKbps">—</div><div class="l">kbps (target / actual)</div></div>
+      <div class="stat"><div class="v" id="sPsnr">—</div><div class="l">PSNR Y/U/V dB</div></div>
+      <div class="stat"><div class="v" id="sQ">—</div><div class="l">q-index (frame type)</div></div>
+      <div class="stat"><div class="v" id="sDrops">—</div><div class="l">drops (RC / capture)</div></div>
+    </div>
+    <div class="panel" style="margin-top:10px">
+      <h2>q-index history</h2>
+      <canvas id="qspark" width="600" height="34"></canvas>
+    </div>
+    <div class="panel" style="margin-top:10px">
+      <h2>CBR bucket level</h2>
+      <div class="bucket" id="bucketBar"><div class="fill" id="bucketFill" style="width:0%"></div>
+        <div class="target" id="bucketTarget" style="left:10%"></div>
+        <div class="headroom" id="bucketHeadroom" style="left:90%"></div>
+      </div>
+      <div style="color:var(--muted);font-size:11px;margin-top:3px">
+        <span style="color:var(--warn)">│</span> target level &nbsp; <span style="color:var(--bad)">│</span> 90% headroom (drop threshold)
+      </div>
+    </div>
+  </section>
+  <section class="panel">
+    <h2>Log</h2>
+    <div id="log">—</div>
+  </section>
+</main>
+
+<script type="module" src="./js/app.js"></script>
+</body>
+</html>
