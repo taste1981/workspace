@@ -403,6 +403,9 @@ function init() {
       readyResolve = resolve;
       readyReject = reject;
     });
+    if (!crossOriginIsolated) {
+      log("WARNING: not crossOriginIsolated — ORT WASM will run single-threaded (server must send COOP/COEP)");
+    }
     const mode =
       el.mode.value === "cbr"
         ? { mode: "cbr", bitrateKbps: Number(el.bitrate.value) }
