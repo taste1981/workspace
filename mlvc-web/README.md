@@ -7,16 +7,14 @@ frames, with **CBR rate control** (leaky-bucket + adaptive rate models) or
 constant-QP mode.
 
 - **Backends**: CPU (`wasm`), GPU (`webgpu`), NPU (`webnn` +
-  `deviceType:'npu'` — on Windows this is implemented by DirectML targeting the
-  Intel NPU adapter), with an automatic fallback chain and an always-visible
-  EP banner.
+  `deviceType:'npu'` — the backend is chosen by the browser/OS; the app
+  probes NPU support and reports the resolved EP), with an automatic fallback
+  chain and an always-visible EP banner.
 - **Resolutions**: 360p (640×368), 720p (1280×720), 1080p (1920×1088 model inputs).
 - **Entropy coder**: the original C++ `msrtc_rans` compiled to WASM (byte-exact
   with the native library; golden-vector tested).
 
 ## Live demo
-
-Live URL: **https://taste1981.github.io/workspace/mlvc-web/**
 
 Host this folder as GitHub Pages (Settings → Pages → deploy from branch), or serve
 it with any static file server (e.g. `python -m http.server`). Open the page in

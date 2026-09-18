@@ -40,9 +40,8 @@ function epLabel(ep) {
 }
 
 // Cache the NPU-context probe (navigator.ml.createContext({deviceType:'npu'})).
-// On Windows, WebNN is implemented by DirectML; a successful NPU context means
-// DML selected the NPU adapter. If the browser rejects it, we skip webnn:npu
-// instead of letting ORT silently fall back to DML's default (GPU) device.
+// If the browser rejects the NPU device type, we skip webnn:npu instead of
+// letting ORT silently fall back to another device.
 let _npuProbe = null;
 async function npuContextSupported() {
   if (_npuProbe !== null) return _npuProbe;
@@ -71,7 +70,7 @@ async function tryCreate(modelBytes, candidates, log) {
       if (ep.name === "webnn" && ep.deviceType === "npu" && !(await npuContextSupported())) {
         warnings.push(
           "webnn:npu skipped: browser rejected createContext({deviceType:'npu'}) " +
-            "(WebNN on Windows is DirectML-backed; NPU device type needs a recent Edge/Chrome + NPU driver)"
+            "(NPU device type needs a recent Edge/Chrome and an NPU driver)"
         );
         continue;
       }

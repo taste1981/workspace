@@ -154,12 +154,10 @@ self.onmessage = async (e) => {
           capabilities: caps,
           workerGL: !!gl,
           warmup,
-          // WebNN on Windows is implemented by DirectML inside the browser;
-          // deviceType:'npu' selects the DML NPU adapter. Seeing DML in logs is
-          // expected, not a fallback.
           note:
             sessions.actualEp.startsWith("webnn")
-              ? "WebNN on Windows is DirectML-backed; deviceType:'npu' targets the DML NPU adapter."
+              ? "WebNN deviceType:'npu' requests the NPU through the browser's WebNN API; " +
+                "the underlying backend is chosen by the browser/OS and may be ORT- or platform-specific."
               : null,
         });
         break;
