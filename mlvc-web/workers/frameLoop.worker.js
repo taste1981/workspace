@@ -354,44 +354,54 @@ self.onmessage = async (e) => {
           }
 
           // ---- non-ML codec comparison (WebCodecs, same bitrate) ----
+          // A compare failure must never break the MLVC pipeline or stall the
+          // frame mailbox — errors disable the compare path and the frame
+          // completes without it.
           let comp = null;
           if (state.compare && videoFrame && !r.dropped) {
-            const t0 = performance.now();
-            const chunk = await state.compare.encodeFrame(videoFrame, {
-              keyFrame: state.compare.frameCount % 30 === 0,
-            });
-            const encMs = performance.now() - t0;
-            if (chunk) {
-              const t1 = performance.now();
-              const decFrame = await state.compare.decodeChunk(chunk);
-              const decMs = performance.now() - t1;
-              if (decFrame) {
-                const compRgba = videoFrameToRgba(decFrame, width, height);
-                decFrame.close();
-                const yBytes = y
-                  ? new Uint8Array(y)
-                  : rgbaLumaToBytes(rgba, width, height);
-                comp = {
-                  rgbRec: compRgba.buffer,
-                  bits: chunk.byteLength * 8,
-                  psnrY: lumaPsnrFromRgba(yBytes, compRgba, width, height),
-                  encMs,
-                  decMs,
-                };
-              }
-            }
             try {
-              videoFrame.close();
-            } catch {}
-            if (state.compare.error) {
+              const t0 = performance.now();
+              const chunk = await state.compare.encodeFrame(videoFrame, {
+                keyFrame: state.compare.frameCount % 30 === 0,
+              });
+              const encMs = performance.now() - t0;
+              if (chunk) {
+                const t1 = performance.now();
+                const decFrame = await state.compare.decodeChunk(chunk);
+                const decMs = performance.now() - t1;
+                if (decFrame) {
+                  const compRgba = videoFrameToRgba(decFrame, width, height);
+                  decFrame.close();
+                  const yBytes = y
+                    ? new Uint8Array(y)
+                    : rgbaLumaToBytes(rgba, width, height);
+                  comp = {
+                    rgbRec: compRgba.buffer,
+                    bits: chunk.byteLength * 8,
+                    psnrY: lumaPsnrFromRgba(yBytes, compRgba, width, height),
+                    encMs,
+                    decMs,
+                  };
+                }
+              }
+              if (state.compare.error) {
+                throw new Error(state.compare.error?.message ?? String(state.compare.error));
+              }
+            } catch (e) {
               post({
                 type: "log",
                 level: "warn",
-                text: `compare codec error: ${state.compare.error?.message ?? state.compare.error}`,
+                text: `compare codec failed, disabling: ${e?.message ?? e}`,
               });
-              state.compare.close?.();
+              try {
+                state.compare.close?.();
+              } catch {}
               state.compare = null;
               post({ type: "compareDisabled" });
+            } finally {
+              try {
+                videoFrame.close();
+              } catch {}
             }
           } else {
             try {
