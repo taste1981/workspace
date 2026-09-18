@@ -9,7 +9,9 @@ constant-QP mode.
 - **Backends**: CPU (`wasm`), GPU (`webgpu`), NPU (`webnn` +
   `deviceType:'npu'` — the backend is chosen by the browser/OS; the app
   probes NPU support and reports the resolved EP), with an automatic fallback
-  chain and an always-visible EP banner.
+  chain and an always-visible EP banner. On Windows, start the browser with
+  `--enable-features=ExperimentalWebMachineLearningNeuralNetwork,WebMachineLearningNeuralNetwork,WebNNOnnxRuntime`
+  to enable WebNN/NPU.
 - **Resolutions**: 360p (640×368), 720p (1280×720), 1080p (1920×1088 model inputs).
 - **Entropy coder**: the original C++ `msrtc_rans` compiled to WASM (byte-exact
   with the native library; golden-vector tested).
