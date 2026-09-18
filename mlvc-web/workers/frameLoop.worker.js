@@ -154,6 +154,9 @@ self.onmessage = async (e) => {
           compare: null,
           mlvcBits: 0,
           mlvcFrames: 0,
+          cqEmaKbps: null,
+          compareBits: 0,
+          compareFrames: 0,
         };
         rebuildLoop();
         const caps = await probeCapabilities();
@@ -218,13 +221,11 @@ self.onmessage = async (e) => {
           post({ type: "compareDisabled" });
           break;
         }
-        // probe the codec string against this browser's encoder support
+        // probe the codec string against this browser's encoder support.
+        // CBR mode: fixed target. CQ mode: an EMA of MLVC's measured rate so the
+        // compare encoder's target doesn't thrash with per-frame rate spikes.
         const bitrateProvider = () => {
-          const kbps = state.mode.mode === "cbr"
-            ? state.mode.bitrateKbps
-            : state.mlvcFrames > 0
-              ? (state.mlvcBits / state.mlvcFrames) * CODEC_PARAMS.fps / 1000
-              : 300;
+          const kbps = state.mode.mode === "cbr" ? state.mode.bitrateKbps : state.cqEmaKbps ?? 300;
           return kbps * 1000;
         };
         const resolved = await probeCodec(
@@ -397,14 +398,21 @@ self.onmessage = async (e) => {
 
           state.mlvcBits += r.bits;
           state.mlvcFrames += 1;
+          // EMA of MLVC's measured rate (CQ compare target)
+          const instKbps = (r.bits * CODEC_PARAMS.fps) / 1000;
+          state.cqEmaKbps = state.cqEmaKbps === null ? instKbps : 0.1 * instKbps + 0.9 * state.cqEmaKbps;
+          if (comp) {
+            state.compareBits += comp.bits;
+            state.compareFrames += 1;
+            comp.kbpsCum = (state.compareBits / state.compareFrames) * CODEC_PARAMS.fps / 1000;
+            comp.codec = state.compare?.codec ?? "";
+          }
 
           post(
             {
               type: "frameDone",
               rgbRec: rgb.buffer,
-              comp: comp
-                ? { ...comp, kbps: (comp.bits * CODEC_PARAMS.fps) / 1000, codec: state.compare?.codec ?? "" }
-                : null,
+              comp,
               captureTs,
               stats: {
                 frameType: r.frameType,

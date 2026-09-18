@@ -40,6 +40,8 @@ export function createWebCodecsPipeline({ codec, width, height, framerate, bitra
   let decError = null;
   let needKeyframe = true; // spec: first frame after configure() must be a keyframe
   let descriptionApplied = false;
+  let lastBitrate = null; // hysteresis state for mid-stream reconfigure
+  let sinceReconfigure = 0;
 
   // pending-promise queues (one event at a time)
   let encChunkResolve = null;
@@ -81,17 +83,19 @@ export function createWebCodecsPipeline({ codec, width, height, framerate, bitra
         }
       },
     });
+    const initialBitrate = bitrateProvider();
     encoder.configure({
       codec,
       width,
       height,
-      bitrate: bitrateProvider(),
+      bitrate: initialBitrate,
       framerate,
       latencyMode: "quality",
       // annexb: the decoder does not need a separate description entry
       avc: codec.startsWith("avc") ? { format: "annexb" } : undefined,
       hevc: codec.startsWith("hvc") ? { format: "annexb" } : undefined,
     });
+    lastBitrate = initialBitrate;
     needKeyframe = true;
   }
 
@@ -124,9 +128,6 @@ export function createWebCodecsPipeline({ codec, width, height, framerate, bitra
   resetEncoder();
   resetDecoder();
 
-  // Reconfigure the encoder rate periodically to track MLVC's current bitrate
-  let sinceReconfigure = 0;
-
   return {
     codec,
     get error() {
@@ -140,11 +141,17 @@ export function createWebCodecsPipeline({ codec, width, height, framerate, bitra
     encodeFrame(videoFrame, { keyFrame = false } = {}) {
       if (sinceReconfigure >= 30) {
         sinceReconfigure = 0;
-        try {
-          encoder.configure({ bitrate: bitrateProvider() });
-          needKeyframe = true; // spec: keyframe required right after configure()
-        } catch {
-          /* some encoders reject mid-stream reconfigure; keep the old rate */
+        // hysteresis: reconfigure only when the target moved meaningfully, so
+        // the encoder's rate control isn't thrashed by small drifts
+        const next = bitrateProvider();
+        if (lastBitrate === null || Math.abs(next - lastBitrate) / lastBitrate > 0.15) {
+          try {
+            encoder.configure({ bitrate: next });
+            lastBitrate = next;
+            needKeyframe = true; // spec: keyframe required right after configure()
+          } catch {
+            /* some encoders reject mid-stream reconfigure; keep the old rate */
+          }
         }
       }
       sinceReconfigure += 1;

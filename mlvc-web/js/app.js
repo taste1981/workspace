@@ -369,9 +369,10 @@ function updateStats(s, captureTs, comp) {
     $("bucketFill").style.background = s.bucketLevel > 0.9 ? "#f87171" : "#38bdf8";
   }
 
-  // WebCodecs comparison stats
+  // WebCodecs comparison stats (cumulative rate — per-frame sizes are spiky for
+  // any target-average rate control: keyframes are inherently much larger)
   if (comp) {
-    $("sCompKbps").textContent = `${comp.codec} ${comp.kbps.toFixed(0)} kbps`;
+    $("sCompKbps").textContent = `${comp.codec} ${comp.kbpsCum.toFixed(0)} kbps`;
     $("sCompPsnr").textContent = `${comp.psnrY.toFixed(1)} dB`;
   }
 }
