@@ -9,12 +9,6 @@ import { RateController } from "../js/rateController.js";
 import { createSessions, probeCapabilities, setOrt } from "../js/session.js";
 import { rgbaToYuv420, yuv420ToRgba, planes444ToX } from "../js/yuv.js";
 import { createWorkerGL } from "../js/workerGL.js";
-import {
-  createWebCodecsPipeline,
-  probeCodec,
-  videoFrameToRgba,
-  lumaPsnrFromRgba,
-} from "../js/webCodecsCodec.js";
 
 setOrt(ort);
 // relative to this module — works on any base path (GitHub Pages subpaths included)
@@ -38,8 +32,7 @@ const CODEC_PARAMS = {
   fps: 30,
 };
 
-// state: { enc, dec, codec, loop, mode, resolution, videoW, videoH, busy, gl,
-//          lastRecX444, compare, mlvcBits, mlvcFrames }
+// state: { enc, dec, codec, loop, mode, resolution, videoW, videoH, busy, gl, lastRecX444 }
 let state = null;
 
 function post(msg, transfer) {
@@ -65,20 +58,6 @@ function makeRate(mode, res) {
     };
   }
   return { mode: "cq", qIndex: mode.qIndex };
-}
-
-// fallback original-Y bytes for the compare PSNR when only rgba is available
-function rgbaLumaToBytes(rgba, w, h) {
-  const bytes = new Uint8Array(w * h);
-  for (let j = 0; j < h; j++) {
-    for (let i = 0; i < w; i++) {
-      const o = (j * w + i) * 4;
-      bytes[j * w + i] = Math.round(
-        0.2126 * rgba[o] + 0.7152 * rgba[o + 1] + 0.0722 * rgba[o + 2]
-      );
-    }
-  }
-  return bytes;
 }
 
 // deterministic synthetic test feed: gradients + a moving block
@@ -151,9 +130,6 @@ self.onmessage = async (e) => {
           busy: false,
           gl,
           lastRecX444: null,
-          compare: null,
-          mlvcBits: 0,
-          mlvcFrames: 0,
         };
         rebuildLoop();
         const caps = await probeCapabilities();
@@ -195,66 +171,6 @@ self.onmessage = async (e) => {
         state.mode = msg.mode;
         rebuildLoop();
         post({ type: "modeSet", mode: msg.mode });
-        break;
-      }
-
-      case "setCompare": {
-        if (!state) {
-          post({ type: "log", level: "warn", text: "setCompare ignored: worker not initialized" });
-          break;
-        }
-        state.compare?.close?.();
-        state.compare = null;
-        if (!msg.codec) {
-          post({ type: "compareDisabled" });
-          break;
-        }
-        if (typeof VideoEncoder === "undefined") {
-          post({
-            type: "log",
-            level: "warn",
-            text: "WebCodecs not available in this browser — compare mode disabled",
-          });
-          post({ type: "compareDisabled" });
-          break;
-        }
-        // probe the codec string against this browser's encoder support
-        const bitrateProvider = () => {
-          const kbps = state.mode.mode === "cbr"
-            ? state.mode.bitrateKbps
-            : state.mlvcFrames > 0
-              ? (state.mlvcBits / state.mlvcFrames) * CODEC_PARAMS.fps / 1000
-              : 300;
-          return kbps * 1000;
-        };
-        const resolved = await probeCodec(
-          msg.codec,
-          state.videoW,
-          state.videoH,
-          bitrateProvider(),
-          CODEC_PARAMS.fps
-        );
-        if (!resolved) {
-          post({
-            type: "log",
-            level: "warn",
-            text: `codec '${msg.codec}' not supported by this browser's encoders`,
-          });
-          post({ type: "compareDisabled" });
-          break;
-        }
-        state.compare = createWebCodecsPipeline({
-          codec: resolved,
-          width: state.videoW,
-          height: state.videoH,
-          framerate: CODEC_PARAMS.fps,
-          bitrateProvider,
-        });
-        post({
-          type: "compareEnabled",
-          codec: resolved,
-          note: `compare codec ${msg.codec} -> ${resolved} (bitrate tracks MLVC's ${state.mode.mode === "cbr" ? "target" : "measured"} rate)`,
-        });
         break;
       }
 
@@ -314,7 +230,7 @@ self.onmessage = async (e) => {
         }
         state.busy = true;
         try {
-          const { rgba, y, uv, width, height, captureTs, videoFrame } = msg;
+          const { rgba, y, uv, width, height, captureTs } = msg;
           let r;
           let rgb;
           let psnrStats = null;
@@ -349,62 +265,10 @@ self.onmessage = async (e) => {
             rgb = yuv420ToRgba(r.reconstructed, width, height);
           }
 
-          // ---- non-ML codec comparison (WebCodecs, same bitrate) ----
-          let comp = null;
-          if (state.compare && videoFrame && !r.dropped) {
-            const t0 = performance.now();
-            const chunk = await state.compare.encodeFrame(videoFrame, {
-              keyFrame: state.compare.frameCount % 30 === 0,
-            });
-            const encMs = performance.now() - t0;
-            if (chunk) {
-              const t1 = performance.now();
-              const decFrame = await state.compare.decodeChunk(chunk);
-              const decMs = performance.now() - t1;
-              if (decFrame) {
-                const compRgba = videoFrameToRgba(decFrame, width, height);
-                decFrame.close();
-                const yBytes = y
-                  ? new Uint8Array(y)
-                  : rgbaLumaToBytes(rgba, width, height);
-                comp = {
-                  rgbRec: compRgba.buffer,
-                  bits: chunk.byteLength * 8,
-                  psnrY: lumaPsnrFromRgba(yBytes, compRgba, width, height),
-                  encMs,
-                  decMs,
-                };
-              }
-            }
-            try {
-              videoFrame.close();
-            } catch {}
-            if (state.compare.error) {
-              post({
-                type: "log",
-                level: "warn",
-                text: `compare codec error: ${state.compare.error?.message ?? state.compare.error}`,
-              });
-              state.compare.close?.();
-              state.compare = null;
-              post({ type: "compareDisabled" });
-            }
-          } else {
-            try {
-              videoFrame?.close();
-            } catch {}
-          }
-
-          state.mlvcBits += r.bits;
-          state.mlvcFrames += 1;
-
           post(
             {
               type: "frameDone",
               rgbRec: rgb.buffer,
-              comp: comp
-                ? { ...comp, kbps: (comp.bits * CODEC_PARAMS.fps) / 1000, codec: state.compare?.codec ?? "" }
-                : null,
               captureTs,
               stats: {
                 frameType: r.frameType,
@@ -426,7 +290,7 @@ self.onmessage = async (e) => {
                 actualFrameBits: r.rcInfo?.actualFrameBits ?? null,
               },
             },
-            comp ? [rgb.buffer, comp.rgbRec] : [rgb.buffer]
+            [rgb.buffer]
           );
         } finally {
           state.busy = false;

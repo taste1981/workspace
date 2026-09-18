@@ -62,6 +62,16 @@
       <option value="cpu">CPU (WASM)</option>
     </select>
   </label>
+  <label>Compare codec (non-ML, same bitrate)
+    <select id="compareCodec">
+      <option value="" selected>— (off)</option>
+      <option value="h264">H.264 (AVC)</option>
+      <option value="hevc">H.265 (HEVC)</option>
+      <option value="vp8">VP8</option>
+      <option value="vp9">VP9</option>
+      <option value="av1">AV1</option>
+    </select>
+  </label>
   <label>Mode
     <select id="mode">
       <option value="cbr" selected>CBR</option>
@@ -97,6 +107,10 @@
     <h2>Decoded output (end-to-end)</h2>
     <canvas id="recCanvas" width="1280" height="720"></canvas>
   </section>
+  <section class="panel hidden" id="compPanel">
+    <h2>WebCodecs output (compare)</h2>
+    <canvas id="compCanvas" width="1280" height="720"></canvas>
+  </section>
   <section class="panel">
     <h2>Live stats</h2>
     <div class="stats">
@@ -108,6 +122,8 @@
       <div class="stat"><div class="v" id="sPsnr">—</div><div class="l">PSNR Y/U/V dB</div></div>
       <div class="stat"><div class="v" id="sQ">—</div><div class="l">q-index (frame type)</div></div>
       <div class="stat"><div class="v" id="sDrops">—</div><div class="l">drops (RC / capture)</div></div>
+      <div class="stat"><div class="v" id="sCompKbps">—</div><div class="l">compare codec kbps</div></div>
+      <div class="stat"><div class="v" id="sCompPsnr">—</div><div class="l">compare PSNR-Y dB</div></div>
     </div>
     <div class="panel" style="margin-top:10px">
       <h2>q-index history</h2>

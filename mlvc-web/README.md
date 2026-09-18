@@ -13,6 +13,9 @@ constant-QP mode.
   `--enable-features=ExperimentalWebMachineLearningNeuralNetwork,WebMachineLearningNeuralNetwork,WebNNOnnxRuntime`
   to enable WebNN/NPU.
 - **Resolutions**: 360p (640×368), 720p (1280×720), 1080p (1920×1088 model inputs).
+- **Compare mode**: run a non-ML browser hardware codec (WebCodecs — H.264/HEVC/
+  VP8/VP9/AV1) on the same frames at the same bitrate, side by side with MLVC,
+  with its kbps and luma PSNR in the stats.
 - **Entropy coder**: the original C++ `msrtc_rans` compiled to WASM (byte-exact
   with the native library; golden-vector tested).
 
