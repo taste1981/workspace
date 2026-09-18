@@ -49,7 +49,6 @@ function makeCompareVideoFrame(canvas, captureTs) {
 
 const el = {
   epBadge: $("epBadge"),
-  isoBadge: $("isoBadge"),
   banner: $("banner"),
   resolution: $("resolution"),
   device: $("device"),
@@ -224,8 +223,6 @@ worker.onmessage = (e) => {
       el.epBadge.textContent = `EP: ${msg.actualEp}`;
       el.epBadge.className = "badge " + (msg.actualEp.startsWith("wasm") ? "warn" : "ok");
       const caps = msg.capabilities ?? {};
-      $("isoBadge").textContent = `crossOriginIsolated: ${crossOriginIsolated}`;
-      $("isoBadge").className = "badge " + (crossOriginIsolated ? "ok" : "warn");
       log(
         `ready on ${msg.actualEp} (${msg.modelLoadMs}ms)` +
           (msg.warmup?.error
@@ -406,11 +403,6 @@ function init() {
       readyResolve = resolve;
       readyReject = reject;
     });
-    el.isoBadge.textContent = `crossOriginIsolated: ${crossOriginIsolated}`;
-    el.isoBadge.className = "badge " + (crossOriginIsolated ? "ok" : "warn");
-    if (!crossOriginIsolated) {
-      log("WARNING: not crossOriginIsolated — ORT WASM will run single-threaded (server must send COOP/COEP)");
-    }
     const mode =
       el.mode.value === "cbr"
         ? { mode: "cbr", bitrateKbps: Number(el.bitrate.value) }
