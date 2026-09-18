@@ -100,55 +100,51 @@
 </div>
 
 <main>
-  <div class="col">
-    <section class="panel">
-      <h2>Camera input</h2>
-      <canvas id="origCanvas" width="1280" height="720"></canvas>
-    </section>
-    <section class="panel">
-      <h2>Live stats</h2>
-      <div class="stats">
-        <div class="stat"><div class="v" id="sFps">—</div><div class="l">end-to-end FPS</div></div>
-        <div class="stat"><div class="v" id="sEnc">—</div><div class="l">encoder ms</div></div>
-        <div class="stat"><div class="v" id="sDec">—</div><div class="l">decoder ms</div></div>
-        <div class="stat"><div class="v" id="sEnt">—</div><div class="l">entropy (rANS) ms</div></div>
-        <div class="stat"><div class="v" id="sKbps">—</div><div class="l">kbps (target / actual)</div></div>
-        <div class="stat"><div class="v" id="sPsnr">—</div><div class="l">PSNR Y/U/V dB</div></div>
-        <div class="stat"><div class="v" id="sQ">—</div><div class="l">q-index (frame type)</div></div>
-        <div class="stat"><div class="v" id="sDrops">—</div><div class="l">drops (RC / capture)</div></div>
-        <div class="stat"><div class="v" id="sCompKbps">—</div><div class="l">compare codec kbps (avg)</div></div>
-        <div class="stat"><div class="v" id="sCompPsnr">—</div><div class="l">compare PSNR-Y dB</div></div>
+  <section class="panel">
+    <h2>Camera input</h2>
+    <canvas id="origCanvas" width="1280" height="720"></canvas>
+  </section>
+  <section class="panel">
+    <h2>Live stats</h2>
+    <div class="stats">
+      <div class="stat"><div class="v" id="sFps">—</div><div class="l">end-to-end FPS</div></div>
+      <div class="stat"><div class="v" id="sEnc">—</div><div class="l">encoder ms</div></div>
+      <div class="stat"><div class="v" id="sDec">—</div><div class="l">decoder ms</div></div>
+      <div class="stat"><div class="v" id="sEnt">—</div><div class="l">entropy (rANS) ms</div></div>
+      <div class="stat"><div class="v" id="sKbps">—</div><div class="l">kbps (target / actual)</div></div>
+      <div class="stat"><div class="v" id="sPsnr">—</div><div class="l">PSNR Y/U/V dB</div></div>
+      <div class="stat"><div class="v" id="sQ">—</div><div class="l">q-index (frame type)</div></div>
+      <div class="stat"><div class="v" id="sDrops">—</div><div class="l">drops (RC / capture)</div></div>
+      <div class="stat"><div class="v" id="sCompKbps">—</div><div class="l">compare codec kbps (avg)</div></div>
+      <div class="stat"><div class="v" id="sCompPsnr">—</div><div class="l">compare PSNR-Y dB</div></div>
+    </div>
+    <div class="panel" style="margin-top:10px">
+      <h2>q-index history</h2>
+      <canvas id="qspark" width="600" height="34"></canvas>
+    </div>
+    <div class="panel" style="margin-top:10px">
+      <h2>CBR bucket level</h2>
+      <div class="bucket" id="bucketBar"><div class="fill" id="bucketFill" style="width:0%"></div>
+        <div class="target" id="bucketTarget" style="left:10%"></div>
+        <div class="headroom" id="bucketHeadroom" style="left:90%"></div>
       </div>
-      <div class="panel" style="margin-top:10px">
-        <h2>q-index history</h2>
-        <canvas id="qspark" width="600" height="34"></canvas>
+      <div style="color:var(--muted);font-size:11px;margin-top:3px">
+        <span style="color:var(--warn)">│</span> target level &nbsp; <span style="color:var(--bad)">│</span> 90% headroom (drop threshold)
       </div>
-      <div class="panel" style="margin-top:10px">
-        <h2>CBR bucket level</h2>
-        <div class="bucket" id="bucketBar"><div class="fill" id="bucketFill" style="width:0%"></div>
-          <div class="target" id="bucketTarget" style="left:10%"></div>
-          <div class="headroom" id="bucketHeadroom" style="left:90%"></div>
-        </div>
-        <div style="color:var(--muted);font-size:11px;margin-top:3px">
-          <span style="color:var(--warn)">│</span> target level &nbsp; <span style="color:var(--bad)">│</span> 90% headroom (drop threshold)
-        </div>
-      </div>
-    </section>
-    <section class="panel">
-      <h2>Log</h2>
-      <div id="log">—</div>
-    </section>
-  </div>
-  <div class="col">
-    <section class="panel">
-      <h2>MLVC decoded output</h2>
-      <canvas id="recCanvas" width="1280" height="720"></canvas>
-    </section>
-    <section class="panel hidden" id="compPanel">
-      <h2>WebCodecs output (compare)</h2>
-      <canvas id="compCanvas" width="1280" height="720"></canvas>
-    </section>
-  </div>
+    </div>
+  </section>
+  <section class="panel" id="recPanel" style="grid-column: 1 / -1">
+    <h2>MLVC decoded output</h2>
+    <canvas id="recCanvas" width="1280" height="720"></canvas>
+  </section>
+  <section class="panel hidden" id="compPanel">
+    <h2>WebCodecs output (compare)</h2>
+    <canvas id="compCanvas" width="1280" height="720"></canvas>
+  </section>
+  <section class="panel" style="grid-column: 1 / -1">
+    <h2>Log</h2>
+    <div id="log">—</div>
+  </section>
 </main>
 
 <script type="module" src="./js/app.js"></script>

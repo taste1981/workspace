@@ -67,6 +67,7 @@ const el = {
   recCanvas: $("recCanvas"),
   compCanvas: $("compCanvas"),
   compPanel: $("compPanel"),
+  recPanel: $("recPanel"),
   compareCodec: $("compareCodec"),
   sCompKbps: $("sCompKbps"),
   sCompPsnr: $("sCompPsnr"),
@@ -295,11 +296,13 @@ worker.onmessage = (e) => {
 
     case "compareEnabled":
       el.compPanel.classList.remove("hidden");
+      el.recPanel.style.gridColumn = ""; // MLVC shares the row with the compare panel
       log(`compare on: ${msg.codec} (${msg.note})`);
       break;
 
     case "compareDisabled":
       el.compPanel.classList.add("hidden");
+      el.recPanel.style.gridColumn = "1 / -1"; // MLVC spans the full row
       break;
 
     case "frameSkipped":
