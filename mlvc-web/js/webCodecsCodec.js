@@ -38,6 +38,8 @@ export function createWebCodecsPipeline({ codec, width, height, framerate, bitra
   let totalBits = 0;
   let encError = null;
   let decError = null;
+  let needKeyframe = true; // spec: first frame after configure() must be a keyframe
+  let descriptionApplied = false;
 
   // pending-promise queues (one event at a time)
   let encChunkResolve = null;
@@ -46,8 +48,24 @@ export function createWebCodecsPipeline({ codec, width, height, framerate, bitra
 
   function resetEncoder() {
     encoder = new VideoEncoder({
-      output: (chunk) => {
+      output: (chunk, metadata) => {
         totalBits += chunk.byteLength * 8;
+        // With 'annexb' the decoder initializes from the bitstream itself, but if
+        // the encoder still provides a decoderConfig description, apply it — it
+        // makes HEVC-style streams decode even where annexb is unsupported.
+        if (!descriptionApplied && metadata?.decoderConfig?.description && decoder) {
+          try {
+            decoder.configure({
+              codec,
+              codedWidth: width,
+              codedHeight: height,
+              description: metadata.decoderConfig.description,
+            });
+            descriptionApplied = true;
+          } catch {
+            /* keep the annexb self-describing path */
+          }
+        }
         if (encChunkResolve) {
           const r = encChunkResolve;
           encChunkResolve = null;
@@ -70,8 +88,11 @@ export function createWebCodecsPipeline({ codec, width, height, framerate, bitra
       bitrate: bitrateProvider(),
       framerate,
       latencyMode: "quality",
-      avc: codec.startsWith("avc") ? { format: "avc" } : undefined,
+      // annexb: the decoder does not need a separate description entry
+      avc: codec.startsWith("avc") ? { format: "annexb" } : undefined,
+      hevc: codec.startsWith("hvc") ? { format: "annexb" } : undefined,
     });
+    needKeyframe = true;
   }
 
   function resetDecoder() {
@@ -121,6 +142,7 @@ export function createWebCodecsPipeline({ codec, width, height, framerate, bitra
         sinceReconfigure = 0;
         try {
           encoder.configure({ bitrate: bitrateProvider() });
+          needKeyframe = true; // spec: keyframe required right after configure()
         } catch {
           /* some encoders reject mid-stream reconfigure; keep the old rate */
         }
@@ -130,7 +152,8 @@ export function createWebCodecsPipeline({ codec, width, height, framerate, bitra
       const chunkPromise = new Promise((resolve) => {
         encChunkResolve = resolve;
       });
-      encoder.encode(videoFrame, { keyFrame });
+      encoder.encode(videoFrame, { keyFrame: keyFrame || needKeyframe });
+      needKeyframe = false;
       frameCount += 1;
       return chunkPromise;
     },
