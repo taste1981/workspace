@@ -282,15 +282,20 @@ worker.onmessage = (e) => {
         el.recCanvas.height = videoH;
         el.recCanvas.getContext("2d").putImageData(rec, 0, 0);
       }
-      if (msg.comp) {
-        el.compCanvas.width = videoW;
-        el.compCanvas.height = videoH;
-        el.compCanvas
-          .getContext("2d")
-          .putImageData(new ImageData(new Uint8ClampedArray(msg.comp.rgbRec), videoW, videoH), 0, 0);
-      }
       waiting = false;
-      updateStats(msg.stats, msg.captureTs, msg.comp);
+      updateStats(msg.stats, msg.captureTs);
+      break;
+    }
+
+    case "compFrame": {
+      const { videoW, videoH } = RES[el.resolution.value];
+      el.compCanvas.width = videoW;
+      el.compCanvas.height = videoH;
+      el.compCanvas
+        .getContext("2d")
+        .putImageData(new ImageData(new Uint8ClampedArray(msg.rgbRec), videoW, videoH), 0, 0);
+      $("sCompKbps").textContent = `${msg.codec} ${msg.kbpsCum.toFixed(0)} kbps`;
+      $("sCompPsnr").textContent = `${msg.psnrY.toFixed(1)} dB`;
       break;
     }
 
@@ -328,7 +333,7 @@ worker.onmessage = (e) => {
 
 // ---------------------------------------------------------------- stats
 
-function updateStats(s, captureTs, comp) {
+function updateStats(s, captureTs) {
   const now = performance.now();
   cumFrames += 1;
   cumBits += s.bits;
@@ -370,13 +375,6 @@ function updateStats(s, captureTs, comp) {
     const pct = Math.min(100, s.bucketLevel * 100);
     $("bucketFill").style.width = `${pct}%`;
     $("bucketFill").style.background = s.bucketLevel > 0.9 ? "#f87171" : "#38bdf8";
-  }
-
-  // WebCodecs comparison stats (cumulative rate — per-frame sizes are spiky for
-  // any target-average rate control: keyframes are inherently much larger)
-  if (comp) {
-    $("sCompKbps").textContent = `${comp.codec} ${comp.kbpsCum.toFixed(0)} kbps`;
-    $("sCompPsnr").textContent = `${comp.psnrY.toFixed(1)} dB`;
   }
 }
 

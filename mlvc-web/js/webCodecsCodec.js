@@ -1,7 +1,13 @@
 // WebCodecs compare pipeline: encode the same camera frames with a browser
-// hardware codec at the same bitrate as MLVC, decode them, and return stats.
-// The VideoEncoder/VideoDecoder APIs are callback-driven; each public method
-// returns a Promise resolved from the matching output event.
+// hardware/software codec at the same bitrate as MLVC, decode them, and report
+// per-frame results through a callback.
+//
+// IMPORTANT design constraint: with latencyMode 'quality' the encoder buffers
+// frames for B-frame reordering (VP8/VP9/AV1 especially) and emits NOTHING for
+// the first few frames. The pipeline is therefore fully fire-and-forget —
+// encode() is never awaited inside the serial MLVC frame loop; decoded frames
+// arrive asynchronously through onDecodedFrame with their presentation order
+// preserved by the decoder.
 
 const CODEC_CANDIDATES = {
   h264: ["avc1.64001f", "avc1.4d401f", "avc1.42e01f", "avc1.42001f"], // 3.1 High/Main/Baseline
@@ -53,48 +59,34 @@ export async function probeCodec(codecName, width, height, bitrate, framerate) {
   return null;
 }
 
-export function createWebCodecsPipeline({ codec, encAccel, decAccel, width, height, framerate, bitrateProvider }) {
+// onDecodedFrame(VideoFrame) is called in decoder presentation order; the caller
+// must close() the frame. onError(err) fires once when the pipeline dies.
+export function createWebCodecsPipeline({
+  codec,
+  encAccel,
+  decAccel,
+  width,
+  height,
+  framerate,
+  bitrateProvider,
+  onDecodedFrame,
+  onError,
+}) {
   let encoder = null;
   let decoder = null;
   let frameCount = 0;
+  let framesDecoded = 0;
   let totalBits = 0;
-  let encError = null;
-  let decError = null;
+  let failed = false;
   let needKeyframe = true; // spec: first frame after configure() must be a keyframe
   let descriptionApplied = false;
   let lastBitrate = null; // hysteresis state for mid-stream reconfigure
   let sinceReconfigure = 0;
 
-  // Queue-based handoff between the callback-driven WebCodecs events and the
-  // promise API below. With latencyMode 'quality' the encoder buffers frames
-  // for B-frame reordering (VP8/VP9/AV1 especially), so outputs do NOT arrive
-  // one-per-call — pending promises are satisfied FIFO from the queues.
-  const chunkQueue = [];
-  const chunkWaiters = [];
-  const frameQueue = [];
-  const frameWaiters = [];
-
-  function resolveNextChunk(chunk) {
-    if (chunkWaiters.length > 0) {
-      chunkWaiters.shift()(chunk);
-    } else {
-      chunkQueue.push(chunk);
-    }
-  }
-
-  function resolveNextFrame(frame) {
-    if (frameWaiters.length > 0) {
-      frameWaiters.shift()(frame);
-    } else {
-      frameQueue.push(frame);
-    }
-  }
-
-  function failAllPending() {
-    while (chunkWaiters.length > 0) chunkWaiters.shift()(null);
-    chunkQueue.length = 0;
-    while (frameWaiters.length > 0) frameWaiters.shift()(null);
-    while (frameQueue.length > 0) frameQueue.shift().close();
+  function fail(e) {
+    if (failed) return;
+    failed = true;
+    onError?.(e);
   }
 
   function resetEncoder() {
@@ -118,12 +110,13 @@ export function createWebCodecsPipeline({ codec, encAccel, decAccel, width, heig
             /* keep the annexb self-describing path */
           }
         }
-        resolveNextChunk(chunk);
+        try {
+          decoder.decode(chunk);
+        } catch (e) {
+          fail(e);
+        }
       },
-      error: (e) => {
-        encError = e;
-        failAllPending();
-      },
+      error: (e) => fail(e),
     });
     const initialBitrate = bitrateProvider();
     encoder.configure({
@@ -145,12 +138,14 @@ export function createWebCodecsPipeline({ codec, encAccel, decAccel, width, heig
   function resetDecoder() {
     decoder = new VideoDecoder({
       output: (frame) => {
-        resolveNextFrame(frame);
+        framesDecoded += 1;
+        try {
+          onDecodedFrame?.(frame);
+        } catch {
+          frame.close();
+        }
       },
-      error: (e) => {
-        decError = e;
-        failAllPending();
-      },
+      error: (e) => fail(e),
     });
     decoder.configure({ codec, codedWidth: width, codedHeight: height, hardwareAcceleration: decAccel });
   }
@@ -161,15 +156,27 @@ export function createWebCodecsPipeline({ codec, encAccel, decAccel, width, heig
   return {
     codec,
     get error() {
-      return encError ?? decError;
+      return failed;
     },
     get bits() {
       return totalBits;
     },
+    get framesDecoded() {
+      return framesDecoded;
+    },
+    get frameCount() {
+      return frameCount;
+    },
 
-    // Encode one frame; resolves with the EncodedVideoChunk (or null on error).
+    // Fire-and-forget encode. The caller owns the VideoFrame and may close it
+    // after this call returns.
     encodeFrame(videoFrame, { keyFrame = false } = {}) {
-      if (encError || decError) return Promise.resolve(null); // pipeline already dead
+      if (failed) {
+        try {
+          videoFrame.close();
+        } catch {}
+        return;
+      }
       if (sinceReconfigure >= 30) {
         sinceReconfigure = 0;
         // hysteresis: reconfigure only when the target moved meaningfully, so
@@ -187,37 +194,22 @@ export function createWebCodecsPipeline({ codec, encAccel, decAccel, width, heig
       }
       sinceReconfigure += 1;
 
-      const chunkPromise = new Promise((resolve) => {
-        if (chunkQueue.length > 0) resolve(chunkQueue.shift());
-        else chunkWaiters.push(resolve);
-      });
-      encoder.encode(videoFrame, { keyFrame: keyFrame || needKeyframe });
+      try {
+        encoder.encode(videoFrame, { keyFrame: keyFrame || needKeyframe });
+      } catch (e) {
+        fail(e);
+      }
       needKeyframe = false;
       frameCount += 1;
-      return chunkPromise;
     },
 
-    // Decode a chunk; resolves with the decoded VideoFrame (or null on error).
-    decodeChunk(chunk) {
-      if (encError || decError) return Promise.resolve(null); // pipeline already dead
-      const framePromise = new Promise((resolve) => {
-        if (frameQueue.length > 0) resolve(frameQueue.shift());
-        else frameWaiters.push(resolve);
-      });
-      decoder.decode(chunk);
-      return framePromise;
-    },
-
-    async flushDecoder() {
+    async flush() {
+      try {
+        await encoder.flush();
+      } catch {}
       try {
         await decoder.flush();
-      } catch {
-        /* flush can reject if the stream was never started */
-      }
-    },
-
-    get frameCount() {
-      return frameCount;
+      } catch {}
     },
 
     close() {
