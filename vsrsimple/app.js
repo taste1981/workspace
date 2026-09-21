@@ -1,5 +1,5 @@
-/* WebNN super-resolution app — fp16 lightB ONNX model via ORT.js.
- * EP fallback chain: webnn -> webgpu -> wasm; model fallback fp16 -> fp32.
+/* WebNN super-resolution app — fp16 lightB model on the raw WebNN runner
+ * (webnn_runner.js). No ONNX Runtime: the graph is built with navigator.ml.
  */
 'use strict';
 
@@ -11,22 +11,16 @@ const origCanvas = $('orig'), srCanvas = $('sr');
 const origCtx = origCanvas.getContext('2d');
 const srCtx = srCanvas.getContext('2d', { willReadFrequently: true });
 
-const EPS = ['webnn', 'webgpu', 'wasm'];
-const MODELS = [
-  { path: 'models/sr_x3_lightB_240x360_fp16.onnx', dtype: 'float16', name: 'fp16' },
-  { path: 'models/sr_x3_lightB_240x360_fp32.onnx', dtype: 'float32', name: 'fp32' },
-];
-
-let session = null, activeEP = null, activeModel = null;
-let runner = null;  // raw WebNN runner (webnn_runner.js), used when ORT fails
+let runner = null;    // raw WebNN runner (webnn_runner.js)
+let activeEP = null;  // display name of the engaged WebNN device
 let warm = false, lastTime = NaN, lastPsnr = NaN;
-let initPromise = null, npuInfo = '…', jsepInfo = '…';
+let initPromise = null, npuInfo = '…';
 
 function setStats() {
   const t = Number.isFinite(lastTime) ? `${lastTime.toFixed(1)} ms` : '—';
   const p = Number.isFinite(lastPsnr) ? `${lastPsnr.toFixed(2)} dB` : '—';
   statsEl.innerHTML =
-    `EP: <b>${activeEP ?? '—'}</b> · model: <b>${activeModel?.name ?? '—'}</b>` +
+    `runtime: <b>${activeEP ?? '—'}</b>` +
     ` · inference: <b>${t}</b> · PSNR vs bilinear luma: <b>${p}</b>` +
     ` · WebNN probe: <b>${npuInfo}</b>`;
 }
@@ -159,8 +153,6 @@ function colorize(bilinearCanvas, srLuma, outCtx) {
   outCtx.putImageData(img, 0, 0);
 }
 
-/* ---------- inference ---------- */
-
 /* ---------- raw graph visualization ---------- */
 
 function renderGraph() {
@@ -285,34 +277,18 @@ function renderGraph() {
   $('graphBox').innerHTML = svg;
 }
 
-/** One 240x360 luma tile through the active runtime; returns fp16 output. */
+/** One 240x360 luma tile through the WebNN runner; returns fp16 output. */
 async function inferTile(luma) {
-  if (runner) {
-    const f16 = (typeof Float16Array !== 'undefined')
-      ? new Float16Array(luma) : packFp16(luma);
-    const u16in = f16 instanceof Float16Array
-      ? new Uint16Array(f16.buffer, f16.byteOffset, f16.length) : f16;
-    return runner.run(u16in);
-  }
-  let tensor;
-  if (activeModel.dtype === 'float16') {
-    const f16 = (typeof Float16Array !== 'undefined')
-      ? new Float16Array(luma) : packFp16(luma);
-    tensor = new ort.Tensor('float16', f16, [1, H, W, 1]);
-  } else {
-    tensor = new ort.Tensor('float32', luma, [1, H, W, 1]);
-  }
-  const results = await session.run({ input: tensor });
-  const outData = results.output.data;
-  return (activeModel.dtype === 'float16')
-    ? (outData instanceof Uint16Array ? outData
-       : new Uint16Array(outData.buffer))
-    : outData;
+  const f16 = (typeof Float16Array !== 'undefined')
+    ? new Float16Array(luma) : packFp16(luma);
+  const u16in = f16 instanceof Float16Array
+    ? new Uint16Array(f16.buffer, f16.byteOffset, f16.length) : f16;
+  return runner.run(u16in);
 }
 
 async function runSR(img) {
-  if (!session && !runner) {
-    statusEl.textContent = 'runtime not ready yet — please wait';
+  if (!runner) {
+    statusEl.textContent = 'WebNN runner not ready yet — please wait';
     return;
   }
 
@@ -484,108 +460,47 @@ async function getBundledSample() {
   }
 }
 
-/** Diagnose the dynamic-import path ORT uses for WebNN/WebGPU (jsep). */
-async function probeJsep() {
-  const url = new URL('ort/ort-wasm-simd-threaded.jsep.mjs', document.baseURI);
-  const parts = [`document.baseURI=${document.baseURI}`];
-  try {
-    const r = await fetch(url);
-    const ct = (r.headers.get('content-type') || '').split(';')[0];
-    parts.push(`status=${r.status} mime=${ct}`);
-    if (!r.ok || !ct.includes('javascript')) {
-      parts.push('=> serve with: python serve.py (fixes .mjs MIME type)');
-    }
-  } catch (e) {
-    parts.push(`fetch failed: ${e.message}`);
-    if (document.baseURI.startsWith('file:')) {
-      parts.push('=> page opened via file:// — use http://localhost:8123');
-    }
+/** Create the raw WebNN runner for the selected device; auto tries the
+ * NPU first, then the default device. */
+async function createRuntime() {
+  if (!navigator.ml) {
+    statusEl.textContent = 'WebNN unavailable — navigator.ml not present';
+    return null;
   }
-  return parts.join(' · ');
-}
-
-async function createSession() {
-  ort.env.wasm.wasmPaths = 'ort/';
-  // EP chain: webnn with the selected deviceType (auto tries NPU first),
-  // then webgpu, then wasm. Each EP tries fp16 model first, then fp32.
   const dev = DEVICE_OPTS.find((d) => d.id === selectedDevice);
-  const combos = [];
-  if (dev.deviceType) {
-    combos.push({ label: `webnn/${dev.deviceType}`, providers: [
-      { name: 'webnn', deviceType: dev.deviceType }] });
-  } else {
-    combos.push({ label: 'webnn/npu', providers: [
-      { name: 'webnn', deviceType: 'npu' }] });
-    combos.push({ label: 'webnn', providers: ['webnn'] });
-  }
-  combos.push({ label: 'webgpu', providers: ['webgpu'] },
-              { label: 'wasm', providers: ['wasm'] });
-
+  const candidates = dev.deviceType ? [dev.deviceType] : ['npu', null];
   let lastErr = '';
-  runner = null;
-  for (const c of combos) {
-    for (const m of MODELS) {
-      try {
-        statusEl.textContent = `trying ${c.label} with ${m.name} model…`;
-        const s = await ort.InferenceSession.create(m.path, {
-          executionProviders: c.providers,
-        });
-        return { session: s, ep: c.label, model: m };
-      } catch (e) {
-        lastErr = `${c.label}: ${e.message}`;
-        console.warn(`[${c.label}/${m.name}] failed:`, e);
-      }
+  for (const dt of candidates) {
+    try {
+      statusEl.textContent = `trying WebNN (${dt || 'default'})…`;
+      const r = await createWebNNRunner(dt);
+      activeEP = `webnn(${dt || 'default'})`;
+      return r;
+    } catch (e) {
+      lastErr = `webnn(${dt || 'default'}): ${e.message}`;
+      console.warn('[webnn] failed:', e);
     }
   }
-  // fallback: raw WebNN graph via navigator.ml (no ORT wasm/jsep loader)
-  if (navigator.ml) {
-    const dev = DEVICE_OPTS.find((d) => d.id === selectedDevice);
-    // auto: prefer the NPU, then the default device
-    const candidates = dev.deviceType ? [dev.deviceType] : ['npu', null];
-    for (const dt of candidates) {
-      try {
-        statusEl.textContent =
-          `trying raw WebNN runner (${dt || 'default'})…`;
-        const r = await createWebNNRunner(dt);
-        runner = r;
-        return {
-          session: null,
-          ep: `webnn-raw(${dt || 'default'})`,
-          model: MODELS[0],
-        };
-      } catch (e) {
-        lastErr = `webnn-raw(${dt || 'default'}): ${e.message}`;
-        console.warn('[webnn-raw] failed:', e);
-      }
-    }
-  }
-  statusEl.textContent = `no execution provider available (${lastErr})`;
+  statusEl.textContent = `no WebNN context available (${lastErr})`;
   return null;
 }
 
 async function init() {
   npuInfo = await probeNPU();
-  jsepInfo = await probeJsep();
-  console.warn('[jsep probe]', jsepInfo);
   setStats();
-  const created = await createSession();
-  if (!created) {
-    statusEl.textContent = 'no execution provider available';
+  runner = await createRuntime();
+  if (!runner) {
+    statusEl.textContent = 'no WebNN execution available';
     return;
   }
-  session = created.session;
-  activeEP = created.ep;
-  activeModel = created.model;
-  statusEl.textContent = `ready — ${activeEP}, ${activeModel.name} model`;
+  statusEl.textContent = `ready — ${activeEP}`;
   setStats();
   try {
     const img = await loadImage(await getBundledSample());
     await runSR(img);
   } catch (e) {
     console.warn('warmup run failed:', e);
-    statusEl.textContent =
-      `ready — ${activeEP}, ${activeModel.name} model (warmup failed: ` +
-      `${e.message})`;
+    statusEl.textContent = `ready — ${activeEP} (warmup failed: ${e.message})`;
   }
 }
 
@@ -593,7 +508,7 @@ $('file').addEventListener('change', async (ev) => {
   const f = ev.target.files[0];
   if (!f) return;
   await initPromise;
-  if (!session) return;
+  if (!runner) return;
   statusEl.textContent = 'running…';
   try {
     const img = await loadImage(URL.createObjectURL(f));
@@ -605,7 +520,7 @@ $('file').addEventListener('change', async (ev) => {
 
 $('sample').addEventListener('click', async () => {
   await initPromise;
-  if (!session) return;
+  if (!runner) return;
   statusEl.textContent = 'running…';
   try {
     const img = await loadImage(await getBundledSample());
@@ -627,7 +542,7 @@ for (const id of ['sr', 'orig']) {
 $('bench').addEventListener('click', async () => {
   await initPromise;
   if (!runner) {
-    statusEl.textContent = 'raw WebNN runner not active — cannot benchmark';
+    statusEl.textContent = 'WebNN runner not active — cannot benchmark';
     return;
   }
   const img = await loadImage(await getBundledSample());
@@ -667,9 +582,8 @@ $('bench').addEventListener('click', async () => {
 
 $('device').addEventListener('change', (ev) => {
   selectedDevice = ev.target.value;
-  session = null;
+  runner = null;
   activeEP = null;
-  activeModel = null;
   warm = false;
   initPromise = init();
 });

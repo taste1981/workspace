@@ -1,6 +1,5 @@
 /* Raw WebNN runner — builds the SR graph with navigator.ml directly.
- * No ORT wasm/jsep loader involved; used as a fallback when the ORT EPs
- * cannot initialize. Weights come from export_webnn.py
+ * No ONNX Runtime (or ONNX) involved. Weights come from export_webnn.py
  * (models/webnn_weights_fp16.bin/.json).
  */
 'use strict';
@@ -130,10 +129,10 @@ async function createWebNNRunner(deviceType) {
   try {
     ctx = await navigator.ml.createContext(
       deviceType ? { deviceType } : undefined);
-    console.warn(`[webnn-raw] context created (deviceType: `
+    console.warn(`[webnn] context created (deviceType: `
                  + `${deviceType || 'default'})`);
   } catch (e) {
-    console.warn(`[webnn-raw] deviceType '${deviceType}' failed `
+    console.warn(`[webnn] deviceType '${deviceType}' failed `
                  + `(${e.message}), using default context`);
     ctx = await navigator.ml.createContext();
   }
