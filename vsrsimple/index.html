@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WebNN Super-Resolution — fp16 lightB</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #10141a; color: #d7dde6;
+    font: 14px/1.5 system-ui, "Segoe UI", sans-serif;
+  }
+  header { padding: 14px 20px; border-bottom: 1px solid #26303c; }
+  h1 { margin: 0 0 6px; font-size: 18px; font-weight: 600; }
+  h1 .sub { color: #7f8b9c; font-weight: 400; font-size: 13px; }
+  .controls { display: flex; gap: 10px; align-items: center; margin: 8px 0 4px; }
+  button, .filelabel, .devlabel, select {
+    background: #1c2530; color: #d7dde6; border: 1px solid #33404f;
+    border-radius: 6px; padding: 6px 14px; cursor: pointer; font-size: 13px;
+  }
+  button:hover { background: #273442; }
+  .devlabel { cursor: default; }
+  input[type=file] { display: none; }
+  #stats { color: #8fa1b5; font-size: 12.5px; min-height: 18px; }
+  #stats b { color: #d7dde6; font-weight: 600; }
+  main {
+    display: flex; gap: 22px; justify-content: center; align-items: center;
+    padding: 18px 20px; flex-direction: column; flex-wrap: wrap;
+  }
+  #compare {
+    display: flex; flex-direction: row; justify-content: center;
+    align-items: flex-start; gap: 24px; flex-wrap: wrap; width: 100%;
+  }
+  figure { margin: 0; text-align: center; }
+  figcaption { margin-bottom: 6px; color: #8fa1b5; font-size: 13px; }
+  #graph { width: 100%; }
+  #graphTitle {
+    color: #8fa1b5; font-size: 13px; margin: 0 0 8px;
+  }
+  #graphBox {
+    overflow-x: auto; background: #0d1117; border: 1px solid #2a3542;
+    border-radius: 6px; padding: 10px 6px;
+  }
+  #srFig canvas {
+    background: #0a0d11; border: 1px solid #2a3542; border-radius: 6px;
+    max-width: min(80vw, 900px); height: auto; image-rendering: auto;
+    cursor: zoom-in;
+  }
+  #origFig canvas {
+    background: #0a0d11; border: 1px solid #2a3542; border-radius: 6px;
+    max-width: min(80vw, 300px); height: auto; image-rendering: auto;
+  }
+  footer {
+    padding: 10px 20px 18px; color: #67748a; font-size: 12px;
+    border-top: 1px solid #26303c; margin-top: 6px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>WebNN Super-Resolution <span class="sub">— 3× luma SR, fp16 lightB model,
+      Y = bilinear(X) + R(X)</span></h1>
+  <div class="controls">
+    <label class="filelabel" for="file">Open image…</label>
+    <input type="file" id="file" accept="image/*">
+    <button id="sample">▶ Run SR (built-in sample)</button>
+    <button id="bench">Benchmark ×200</button>
+    <label class="devlabel" for="device">Device</label>
+    <select id="device">
+      <option value="auto" selected>Auto (NPU→GPU→CPU)</option>
+      <option value="npu">NPU</option>
+      <option value="gpu">GPU</option>
+      <option value="cpu">CPU</option>
+    </select>
+    <label class="devlabel" for="fitMode">
+      <input type="checkbox" id="fitMode" style="margin-right:5px">
+      Fit to one 240×360 input</label>
+    <span id="status">loading runtime…</span>
+  </div>
+  <div id="stats"></div>
+</header>
+<main>
+  <section id="graph">
+    <div id="graphTitle">Raw WebNN graph — the exact op sequence dispatched on
+      the device (PReLU = α·x + (1−α)·relu(x); constants not shown) ·
+      <label><input type="checkbox" id="graphExpand"
+        style="margin-right:4px">expand PReLU/D2S micro-ops</label></div>
+    <div id="graphBox"></div>
+  </section>
+  <div id="compare">
+    <figure id="origFig">
+      <figcaption id="origCap">Original — bilinear 3×</figcaption>
+      <canvas id="orig" width="720" height="1080"></canvas>
+    </figure>
+    <figure id="srFig">
+      <figcaption id="srCap">SR output — model detail + bilinear baseline
+        (click to open full resolution)</figcaption>
+      <canvas id="sr" width="720" height="1080"></canvas>
+    </figure>
+  </div>
+</main>
+<footer>
+  Input: any image, tiled into 240×360 luma FP16 patches (the model's fixed
+  input size), each upscaled 3× and stitched into the full-frame output —
+  SR luma fused with bilinear-upsampled chroma. Model: 7×Conv2D + 9×PReLU +
+  2×DepthToSpace(→Reshape/Transpose for WebNN) + Resize + Adds (random
+  weights, structural replica). WebNN runs on the DirectML backend — select
+  NPU to target the neural processor, or Auto to try NPU → GPU → CPU.
+</footer>
+<script src="ort/ort.all.min.js"></script>
+<script src="webnn_runner.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
