@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HDR transcoding with Direct3D 12 video encoding in Chrome</title>
+<link rel="stylesheet" href="css/demo.css">
+<script type="module" src="js/main.js"></script>
+</head>
+<body>
+<header class="hero">
+  <p class="eyebrow">Chrome 158 · Windows · Direct3D 12 video encoding</p>
+  <h1>HDR transcoding, with a reference structure <em>you</em> design</h1>
+  <p class="lede">
+    Five frames of HDR10 video are decoded on the GPU, re-encoded by Chrome's
+    Direct3D 12 encoder with the reference structure you choose, and read back
+    from the bitstream to show exactly what the encoder did. Choosing the
+    structure uses manual reference control, which is experimental in
+    Chrome&nbsp;158: to use it, turn on
+    <code>chrome://flags/#enable-experimental-web-platform-features</code> and
+    relaunch Chrome.
+  </p>
+  <ul class="system" id="system"></ul>
+</header>
+
+<main>
+  <p class="banner" id="flag-banner" hidden>
+    Manual reference control is experimental in Chrome 158. Turn on
+    <code>chrome://flags/#enable-experimental-web-platform-features</code> and
+    relaunch Chrome to design your own structure. Until then, you can try the two
+    structures that the <code>L1T1</code> and <code>L1T2</code> scalability
+    modes produce.
+  </p>
+
+  <section class="card" id="capabilities">
+    <header class="card-head">
+      <span class="step">1</span>
+      <div>
+        <h2>What this GPU can encode</h2>
+        <p>Hardware support for the 10-bit profiles, as reported by
+           <code>VideoEncoder.isConfigSupported()</code>.</p>
+      </div>
+    </header>
+    <div class="cap-grid" id="cap-grid"></div>
+  </section>
+
+  <section class="card" id="source">
+    <header class="card-head">
+      <span class="step">2</span>
+      <div>
+        <h2>Source: HDR10 video</h2>
+        <p id="source-name">Loading…</p>
+      </div>
+      <label class="button">
+        Use your own clip
+        <input type="file" id="source-file" accept=".hevc,.h265,.265,.ivf" hidden>
+      </label>
+    </header>
+    <div class="filmstrip" id="source-strip"></div>
+    <dl class="facts" id="source-facts"></dl>
+  </section>
+
+  <section class="card" id="structure">
+    <header class="card-head">
+      <span class="step">3</span>
+      <div>
+        <h2>Design the reference structure</h2>
+        <p>Each delta frame predicts from the frames held in reference
+           buffers, and can then store itself in one for later frames.</p>
+      </div>
+    </header>
+    <div class="segmented" id="presets"></div>
+    <p class="hint" id="preset-description"></p>
+    <div class="timeline-wrap">
+      <svg class="arcs" id="plan-arcs" aria-hidden="true"></svg>
+      <div class="timeline" id="timeline"></div>
+    </div>
+    <div class="buffer-grid" id="buffer-grid"></div>
+    <p class="validation" id="validation"></p>
+  </section>
+
+  <section class="card" id="encode">
+    <header class="card-head">
+      <span class="step">4</span>
+      <div>
+        <h2>Encode on the GPU</h2>
+        <p>Each frame goes to <code>VideoEncoder.encode()</code> with the
+           <code>referenceBuffers</code> and <code>updateBuffer</code> from
+           your structure.</p>
+      </div>
+    </header>
+    <div class="controls">
+      <label class="control">
+        <span>Output profile</span>
+        <select id="target"></select>
+      </label>
+      <div class="control">
+        <span>Rate control</span>
+        <div class="segmented small" id="rate-control">
+          <button data-mode="variable" aria-pressed="true">VBR</button>
+          <button data-mode="constant" aria-pressed="false">CBR</button>
+          <button data-mode="quantizer" aria-pressed="false">Quantizer</button>
+        </div>
+      </div>
+      <label class="control" id="bitrate-control">
+        <span>Bitrate <output id="bitrate-value"></output></span>
+        <input type="range" id="bitrate" min="1" max="20" value="6">
+      </label>
+      <label class="control" id="quantizer-control" hidden>
+        <span>Quantizer <output id="quantizer-value"></output></span>
+        <input type="range" id="quantizer" min="1" max="51" value="30">
+      </label>
+      <button class="button primary" id="transcode" disabled>Transcode</button>
+    </div>
+    <ol class="pipeline" id="pipeline">
+      <li data-stage="decode">Decode source<small>GPU decoder</small></li>
+      <li data-stage="encode">Encode<small>Direct3D 12</small></li>
+      <li data-stage="parse">Parse bitstream<small>references, HDR</small></li>
+      <li data-stage="verify">Decode output<small>round trip</small></li>
+    </ol>
+    <p class="status" id="status"></p>
+  </section>
+
+  <section class="card" id="results" hidden>
+    <header class="card-head">
+      <span class="step">5</span>
+      <div>
+        <h2>What the encoder produced</h2>
+        <p id="results-subtitle"></p>
+      </div>
+      <div class="actions">
+        <a class="button" id="download-stream">Download bitstream</a>
+        <a class="button" id="download-report">Download report</a>
+      </div>
+    </header>
+    <div class="summary" id="summary"></div>
+    <div class="timeline-wrap result-strip">
+      <svg class="arcs" id="result-arcs" aria-hidden="true"></svg>
+      <div class="timeline" id="result-timeline"></div>
+    </div>
+    <div class="player">
+      <canvas id="player" width="1280" height="720"></canvas>
+      <div class="player-caption" id="player-caption"></div>
+      <button class="button" id="play">Play</button>
+    </div>
+    <h3>Frame by frame</h3>
+    <div class="table-wrap"><table class="frames" id="frame-table"></table></div>
+    <h3>HDR signaling, source and output</h3>
+    <div class="table-wrap"><table class="compare" id="hdr-table"></table></div>
+    <h3>Encoder configuration</h3>
+    <pre class="config" id="config"></pre>
+  </section>
+</main>
+
+<footer>
+  <p>
+    Thumbnails and the player are tone mapped to SDR. Quality is the luma PSNR
+    of each output frame against its source frame, measured on the tone
+    mapped pictures. To confirm which encoder ran, open
+    <code>chrome://media-internals</code>: <code>kVideoEncoderName</code> reads
+    <code>D3D12VideoEncodeAccelerator</code>.
+  </p>
+  <p>
+    The source clip is <code>bear-1280x720-hevc-10bit-hdr10.hevc</code> from
+    Chromium's media test data.
+  </p>
+</footer>
+</body>
+</html>
